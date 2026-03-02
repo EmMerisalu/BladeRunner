@@ -2,19 +2,118 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>Blade Run - 4 Tracks</title>
+  <title>BladeRunner</title>
+  <style>
+    body { margin: 0; background: #111; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; }
+    #lobby { text-align: center; }
+    input, button { padding: 8px 16px; margin: 6px; font-size: 16px; }
+    #playerList { margin: 16px 0; min-height: 80px; }
+    .player-entry { margin: 4px 0; }
+    #error { color: tomato; min-height: 20px; }
+    #game { display: none; position: fixed; inset: 0; }
+  </style>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
-<div id="ui">
-  <div id="timer">Time: 0.0</div>
+<div id="lobby">
+  <h1>BladeRunner</h1>
+  <input id="nameInput" type="text" placeholder="Enter your name" maxlength="16" />
+  <button id="setNameBtn">Set Name</button>
+  <div id="error"></div>
+  <div id="playerList"></div>
+  <button id="readyBtn" disabled>Ready</button>
+  <button id="startBtn" style="display:none" disabled>Start Game</button>
+  <div id="status">Waiting for players...</div>
 </div>
 
 <div id="game">
-  <div id="trackLines"></div>
+  <div id="ui">
+    <div id="timer">Time: 0.0</div>
+  </div>
+  <div id="gameArea">
+    <div id="trackLines"></div>
+  </div>
 </div>
 
 <script src="game.js"></script>
+<script>
+  // Always create a fresh WebSocket on page load
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(`${protocol}//${location.host}`);
+
+  ws.onopen = () => {
+    console.log("Connected to server");
+  };
+
+  ws.onclose = () => {
+    document.getElementById("status").textContent = "Disconnected from server. Please refresh.";
+  };
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+
+    // Pass all messages to game.js handler
+    handleServerMessage(msg);
+
+    if (msg.type === "rejected") {
+      document.getElementById("status").textContent = msg.reason;
+      return;
+    }
+
+    if (msg.type === "welcome") {
+      myId = msg.id;
+      if (msg.isHost) {
+        document.getElementById("startBtn").style.display = "inline";
+      }
+    }
+
+    if (msg.type === "nameTaken") {
+      document.getElementById("error").textContent = "Name already taken!";
+    }
+
+    if (msg.type === "lobby") {
+      const list = document.getElementById("playerList");
+      list.innerHTML = msg.players.map(p =>
+        `<div class="player-entry">
+          ${p.name || "(unnamed)"}
+          ${p.id === msg.hostId ? "👑" : ""}
+          ${p.ready ? "✅" : "⬜"}
+        </div>`
+      ).join("");
+
+      if (myId === msg.hostId) {
+    document.getElementById("startBtn").style.display = "inline";
+    const allReady = msg.players.length >= 1 &&
+      msg.players.every(p => p.ready && p.name);
+    document.getElementById("startBtn").disabled = !allReady;
+  } else {
+    document.getElementById("startBtn").style.display = "none";
+  }
+}
+
+    if (msg.type === "start") {
+      document.getElementById("lobby").style.display = "none";
+      document.getElementById("game").style.display = "block";
+      initGame();
+    }
+  };
+
+  document.getElementById("setNameBtn").onclick = () => {
+    const name = document.getElementById("nameInput").value.trim();
+    if (!name) return;
+    document.getElementById("error").textContent = "";
+    ws.send(JSON.stringify({ type: "setName", name }));
+    document.getElementById("readyBtn").disabled = false;
+  };
+
+  document.getElementById("readyBtn").onclick = () => {
+    ws.send(JSON.stringify({ type: "ready" }));
+  };
+
+  document.getElementById("startBtn").onclick = () => {
+    ws.send(JSON.stringify({ type: "startGame" }));
+  };
+</script>
 </body>
 </html>

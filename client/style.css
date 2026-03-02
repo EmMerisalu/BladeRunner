@@ -13,6 +13,12 @@ body {
   z-index: 100;
 }
 
+#scoreboard {
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
 #game {
   position: relative;
   width: 100vw;
@@ -21,11 +27,18 @@ body {
   background: #222;
 }
 
+#gameArea {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
 #trackLines { z-index: 1; }
 .obstacle { z-index: 5; }
 .player { z-index: 10; }
 .hp-bar { z-index: 12; }
 .dodge-indicator { z-index: 11; }
+.name-tag { z-index: 13; }
 
 .player {
   position: absolute;
@@ -35,7 +48,7 @@ body {
   font-size: 30px;
   border-radius: 4px;
   box-shadow: inset 0 0 8px rgba(0,0,0,0.6);
-  transition: all 0.3s ease;
+  transition: height 0.1s ease, opacity 0.8s ease;
 }
 
 .obstacle {
@@ -48,9 +61,7 @@ body {
   color: white;
 }
 
-.obstacle.red {
-  background: crimson;
-}
+.obstacle.red { background: crimson; }
 
 .obstacle.blue {
   background: royalblue;
@@ -69,7 +80,16 @@ body {
   background: red;
   border-radius: 2px;
   pointer-events: none;
-  transition: width 0.2s ease;
+  transition: width 0.2s ease, opacity 0.8s ease;
+}
+
+.name-tag {
+  position: absolute;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 0 0 4px black;
+  transition: opacity 0.8s ease;
 }
 
 .dodge-indicator {
@@ -112,4 +132,87 @@ body {
   height: 4px;
   width: 100%;
   opacity: 0.8;
+}
+
+/* PAUSE OVERLAY */
+#pauseOverlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  z-index: 200;
+  justify-content: center;
+  align-items: center;
+}
+
+#pauseBox {
+  background: #222;
+  border: 2px solid #555;
+  border-radius: 12px;
+  padding: 40px 60px;
+  text-align: center;
+}
+
+#pauseMsg {
+  font-size: 22px;
+  margin-bottom: 24px;
+  color: #ccc;
+}
+
+#pauseBox button {
+  margin: 8px;
+  padding: 10px 28px;
+  font-size: 16px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+#resumeBtn { background: limegreen; color: black; }
+#quitBtn   { background: crimson;   color: white; }
+
+/* GAME OVER OVERLAY */
+#gameOverOverlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.8);
+  z-index: 200;
+  justify-content: center;
+  align-items: center;
+}
+
+#gameOverBox {
+  background: #222;
+  border: 2px solid gold;
+  border-radius: 12px;
+  padding: 50px 80px;
+  text-align: center;
+}
+
+#winnerMsg {
+  font-size: 36px;
+  font-weight: bold;
+  color: gold;
+}
+
+/* NOTIFICATIONS */
+.notification {
+  position: fixed;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.8);
+  border: 1px solid #555;
+  border-radius: 8px;
+  padding: 10px 24px;
+  font-size: 15px;
+  z-index: 300;
+  animation: fadeout 3s forwards;
+}
+
+@keyframes fadeout {
+  0%   { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { opacity: 0; }
 }

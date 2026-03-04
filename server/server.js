@@ -5,6 +5,9 @@ const { WebSocketServer } = require("ws");
 const app = express();
 app.use(express.static("client"));
 
+// Allow parsing JSON bodies for API endpoints
+app.use(express.json());
+
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
@@ -37,57 +40,75 @@ function freshGameState() {
   };
 }
 
-let gameState = freshGameState();
+// Support multiple lobbies keyed by lobbyId
+const lobbies = {}; // lobbyId -> { players, started, hostId, gameState, nextPlayerId, loopInterval, lastTick }
+
+function createLobby() {
+  const id = Math.random().toString(36).slice(2, 8);
+  lobbies[id] = {
+    players: {},
+    started: false,
+    hostId: null,
+    gameState: freshGameState(),
+    nextPlayerId: 1,
+    loopInterval: null,
+    lastTick: null
+  };
+  return id;
+}
+
+// API: create a new lobby and return its URL
+app.post('/create-lobby', (req, res) => {
+  const name = (req.body && req.body.name) ? String(req.body.name).trim() : null;
+  const id = createLobby();
+  res.json({ lobbyId: id, url: `/lobby?lobby=${id}` });
+});
 
 // ===============================
-// LOBBY STATE
+// GAME LOOP + LOBBY-SCOPED HELPERS
 // ===============================
-const lobby = {
-  players: {},
-  started: false,
-  hostId: null
-};
 
-let nextPlayerId = 1;
+function startGameLoopFor(lobbyId) {
+  const lobby = lobbies[lobbyId];
+  if (!lobby) return;
+  lobby.lastTick = Date.now();
+  lobby.gameState.running = true;
 
-// ===============================
-// GAME LOOP
-// ===============================
-let lastTick = null;
+  // Avoid multiple intervals
+  if (lobby.loopInterval) return;
 
-function startGameLoop() {
-  lastTick = Date.now();
-  gameState.running = true;
-
-  setInterval(() => {
-    if (!gameState.running) return;
-    if (gameState.paused) return;
+  lobby.loopInterval = setInterval(() => {
+    if (!lobby.gameState.running) return;
+    if (lobby.gameState.paused) return;
 
     const now = Date.now();
-    const delta = (now - lastTick) / 1000;
-    lastTick = now;
+    const delta = (now - lobby.lastTick) / 1000;
+    lobby.lastTick = now;
 
-    tick(delta);
+    tickLobby(lobbyId, delta);
   }, CONFIG.tickRate);
 }
 
-function tick(delta) {
-  gameState.timer += delta;
+function tickLobby(lobbyId, delta) {
+  const lobby = lobbies[lobbyId];
+  if (!lobby) return;
+  const gameState = lobby.gameState;
 
+  gameState.timer += delta;
   gameState.lastSpeedIncrease += delta * 1000;
   if (gameState.lastSpeedIncrease >= CONFIG.speedIncreaseInterval) {
     gameState.speed += CONFIG.speedIncreaseAmount;
     gameState.lastSpeedIncrease = 0;
   }
 
-  checkWinner();
-  broadcastGameState();
+  checkWinnerLobby(lobbyId);
+  broadcastGameStateFor(lobbyId);
 }
 
-// ===============================
-// PLAYERS
-// ===============================
-function initGamePlayers() {
+function initGamePlayersFor(lobbyId) {
+  const lobby = lobbies[lobbyId];
+  if (!lobby) return;
+  const gameState = lobby.gameState;
   Object.values(lobby.players).forEach(p => {
     gameState.players[p.id] = {
       id: p.id,
@@ -108,10 +129,10 @@ function loseHP(p) {
   if (p.hp <= 0) p.falling = true;
 }
 
-// ===============================
-// WINNER CHECK
-// ===============================
-function checkWinner() {
+function checkWinnerLobby(lobbyId) {
+  const lobby = lobbies[lobbyId];
+  if (!lobby) return;
+  const gameState = lobby.gameState;
   if (gameState.winner) return;
 
   const all = Object.values(gameState.players);
@@ -123,28 +144,28 @@ function checkWinner() {
   if (all.length === 1 && alive.length === 0) {
     gameState.winner = "No one";
     gameState.running = false;
-    broadcast({ type: "gameOver", winner: "No one" });
+    broadcastToLobby(lobbyId, { type: "gameOver", winner: "No one" });
     return;
   }
 
   if (all.length > 1 && alive.length === 1) {
     gameState.winner = alive[0].name;
     gameState.running = false;
-    broadcast({ type: "gameOver", winner: gameState.winner });
+    broadcastToLobby(lobbyId, { type: "gameOver", winner: gameState.winner });
   }
 
   if (all.length > 1 && alive.length === 0) {
     gameState.winner = "No one";
     gameState.running = false;
-    broadcast({ type: "gameOver", winner: "No one" });
+    broadcastToLobby(lobbyId, { type: "gameOver", winner: "No one" });
   }
 }
 
-// ===============================
-// BROADCAST
-// ===============================
-function broadcastGameState() {
-  broadcast({
+function broadcastGameStateFor(lobbyId) {
+  const lobby = lobbies[lobbyId];
+  if (!lobby) return;
+  const gameState = lobby.gameState;
+  broadcastToLobby(lobbyId, {
     type: "gameState",
     timer: gameState.timer,
     speed: gameState.speed,
@@ -163,17 +184,21 @@ function broadcastGameState() {
   });
 }
 
-function broadcastLobby() {
+function broadcastLobbyFor(lobbyId) {
+  const lobby = lobbies[lobbyId];
+  if (!lobby) return;
   const snapshot = Object.values(lobby.players).map(p => ({
     id: p.id,
     name: p.name,
     ready: p.ready,
     track: p.track
   }));
-  broadcast({ type: "lobby", players: snapshot, hostId: lobby.hostId });
+  broadcastToLobby(lobbyId, { type: "lobby", players: snapshot, hostId: lobby.hostId });
 }
 
-function broadcast(obj) {
+function broadcastToLobby(lobbyId, obj) {
+  const lobby = lobbies[lobbyId];
+  if (!lobby) return;
   const msg = JSON.stringify(obj);
   Object.values(lobby.players).forEach(p => {
     if (p.ws.readyState === 1) p.ws.send(msg);
@@ -183,32 +208,49 @@ function broadcast(obj) {
 // ===============================
 // CONNECTIONS
 // ===============================
-wss.on("connection", (ws) => {
-  if (lobby.started && !gameState.winner) {
-    ws.send(JSON.stringify({ type: "rejected", reason: "Game already started" }));
+const { URL } = require('url');
+
+wss.on('connection', (ws, req) => {
+  // parse lobby id from query param: ws://host/?lobby=ID
+  let lobbyId = null;
+  try {
+    const full = new URL(req.url, `http://${req.headers.host}`);
+    lobbyId = full.searchParams.get('lobby');
+  } catch (e) { /* ignore */ }
+
+  if (!lobbyId || !lobbies[lobbyId]) {
+    ws.send(JSON.stringify({ type: 'rejected', reason: 'Lobby not found' }));
+    ws.close();
+    return;
+  }
+
+  const lobby = lobbies[lobbyId];
+
+  if (lobby.started && !lobby.gameState.winner) {
+    ws.send(JSON.stringify({ type: 'rejected', reason: 'Game already started' }));
     ws.close();
     return;
   }
 
   if (Object.keys(lobby.players).length >= 4) {
-    ws.send(JSON.stringify({ type: "rejected", reason: "Lobby is full" }));
+    ws.send(JSON.stringify({ type: 'rejected', reason: 'Lobby is full' }));
     ws.close();
     return;
   }
 
-  const id = nextPlayerId++;
+  const id = lobby.nextPlayerId++;
   const track = Object.keys(lobby.players).length;
   const isHost = lobby.hostId === null;
 
   lobby.players[id] = { id, name: null, ready: false, track, ws };
   if (isHost) lobby.hostId = id;
 
-  ws.send(JSON.stringify({ type: "welcome", id, track, isHost }));
-  broadcastLobby();
+  ws.send(JSON.stringify({ type: 'welcome', id, track, isHost }));
+  broadcastLobbyFor(lobbyId);
 
-  ws.on("message", (raw) => handleMessage(id, raw));
+  ws.on('message', (raw) => handleMessageFor(lobbyId, id, raw));
 
-  ws.on("close", () => {
+  ws.on('close', () => {
     delete lobby.players[id];
 
     if (lobby.hostId === id) {
@@ -219,37 +261,44 @@ wss.on("connection", (ws) => {
     if (Object.keys(lobby.players).length === 0) {
       lobby.started = false;
       lobby.hostId = null;
-      gameState = freshGameState();
-      console.log("All players left — lobby reset");
+      lobby.gameState = freshGameState();
+      if (lobby.loopInterval) {
+        clearInterval(lobby.loopInterval);
+        lobby.loopInterval = null;
+      }
+      console.log(`All players left — lobby ${lobbyId} reset`);
     }
 
-    broadcastLobby();
+    broadcastLobbyFor(lobbyId);
   });
 });
 
 // ===============================
-// MESSAGE HANDLER
+// MESSAGE HANDLER (per-lobby)
 // ===============================
-function handleMessage(id, raw) {
+function handleMessageFor(lobbyId, id, raw) {
+  const lobby = lobbies[lobbyId];
+  if (!lobby) return;
+  const gameState = lobby.gameState;
   let msg;
   try { msg = JSON.parse(raw); } catch { return; }
 
-  if (msg.type === "setName") {
+  if (msg.type === 'setName') {
     const nameTaken = Object.values(lobby.players).some(p => p.id !== id && p.name === msg.name);
     if (nameTaken) {
-      lobby.players[id].ws.send(JSON.stringify({ type: "nameTaken" }));
+      lobby.players[id].ws.send(JSON.stringify({ type: 'nameTaken' }));
       return;
     }
     lobby.players[id].name = msg.name;
-    broadcastLobby();
+    broadcastLobbyFor(lobbyId);
   }
 
-  if (msg.type === "ready") {
+  if (msg.type === 'ready') {
     lobby.players[id].ready = !lobby.players[id].ready;
-    broadcastLobby();
+    broadcastLobbyFor(lobbyId);
   }
 
-  if (msg.type === "startGame") {
+  if (msg.type === 'startGame') {
     const players = Object.values(lobby.players);
     const canStart =
       id === lobby.hostId &&
@@ -258,54 +307,66 @@ function handleMessage(id, raw) {
       players.every(p => p.ready);
 
     if (canStart) {
-      lobby.started = true;
-      initGamePlayers();
-      startGameLoop();
-      broadcast({ type: "start" });
+      // mark pending start and tell clients to navigate to the game page
+      lobby.pendingStart = true;
+      broadcastToLobby(lobbyId, { type: 'start' });
+
+      // delay actual game initialization slightly so clients can reconnect
+      setTimeout(() => {
+        if (!lobby.pendingStart) return;
+        lobby.pendingStart = false;
+        lobby.started = true; // officially started now
+        initGamePlayersFor(lobbyId);
+        startGameLoopFor(lobbyId);
+        // confirm to clients that game loop has started
+        broadcastToLobby(lobbyId, { type: 'started' });
+      }, 800);
     }
   }
 
   // Client reports collision — server deducts HP
-  if (msg.type === "hit") {
+  if (msg.type === 'hit') {
     const p = gameState.players[id];
     if (p) loseHP(p);
   }
 
   // Client syncs its player state to server
-  if (msg.type === "input") {
+  if (msg.type === 'input') {
     const p = gameState.players[id];
     if (!p || p.falling) return;
 
-    if (msg.action === "laneUp" && p.lane > 0) p.lane--;
-    if (msg.action === "laneDown" && p.lane < CONFIG.lanesPerTrack - 1) p.lane++;
-    if (msg.action === "dodgeLeft") p.dodge = "left";
-    if (msg.action === "dodgeRight") p.dodge = "right";
-    if (msg.action === "dodgeNone") p.dodge = null;
+    if (msg.action === 'laneUp' && p.lane > 0) p.lane--;
+    if (msg.action === 'laneDown' && p.lane < CONFIG.lanesPerTrack - 1) p.lane++;
+    if (msg.action === 'dodgeLeft') p.dodge = 'left';
+    if (msg.action === 'dodgeRight') p.dodge = 'right';
+    if (msg.action === 'dodgeNone') p.dodge = null;
   }
 
-  if (msg.type === "pause") {
+  if (msg.type === 'pause') {
     if (!gameState.running && !gameState.paused) return;
     const playerName = gameState.players[id]?.name || lobby.players[id]?.name;
     gameState.paused = !gameState.paused;
     gameState.pausedBy = gameState.paused ? playerName : null;
-    if (!gameState.paused) lastTick = Date.now();
-    broadcast({
-      type: "pauseState",
+    if (!gameState.paused) lobby.lastTick = Date.now();
+    broadcastToLobby(lobbyId, {
+      type: 'pauseState',
       paused: gameState.paused,
       pausedBy: gameState.pausedBy
     });
   }
 
-  if (msg.type === "quit") {
+  if (msg.type === 'quit') {
     const playerName = gameState.players[id]?.name || lobby.players[id]?.name;
-    broadcast({ type: "playerQuit", name: playerName });
+    broadcastToLobby(lobbyId, { type: 'playerQuit', name: playerName });
     const p = gameState.players[id];
     if (p) p.falling = true;
   }
 }
 
 const path = require("path");
-app.use(express.static(path.join(__dirname, "../client/game")));
+app.use('/', express.static(path.join(__dirname, '../client/menu')));
+app.use('/game',  express.static(path.join(__dirname, '../client/game')));
+app.use('/lobby', express.static(path.join(__dirname, '../client/lobby')));
 
 // ===============================
 // START SERVER

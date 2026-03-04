@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Lobby</title>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;background:#071028;color:#e6eef8;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+    .box{background:#0b1530;padding:20px;border-radius:8px;width:420px;box-shadow:0 8px 30px rgba(0,0,0,.6)}
+    h1{margin:0 0 8px;font-size:18px}
+    #players{min-height:80px;background:rgba(255,255,255,.02);padding:8px;border-radius:6px}
+    .player{padding:6px;border-bottom:1px solid rgba(255,255,255,.02)}
+    .controls{display:flex;gap:8px;margin-top:10px}
+    input[type=text]{flex:1;padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,.06);background:transparent;color:inherit}
+    button{padding:8px 12px;border-radius:6px;border:0;background:#3b82f6;color:#fff;cursor:pointer}
+    button[disabled]{opacity:.5;cursor:not-allowed}
+    .meta{font-size:12px;color:#9fb7df;margin-top:8px}
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>Lobby</h1>
+    <div class="meta">Lobby ID: <span id="lobbyId">-</span> <button id="copyId">Copy</button></div>
+
+    <div id="players"></div>
+
+    <div class="controls">
+      <input id="nameInput" placeholder="Your name" maxlength="16" />
+      <button id="setNameBtn">Set</button>
+      <button id="readyBtn" disabled>Ready</button>
+      <button id="startBtn" style="display:none">Play</button>
+    </div>
+
+    <div id="status" class="meta"></div>
+  </div>
+
+  <script>
+    (function(){
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${protocol}//${location.host}${location.search}`);
+      const playersEl = document.getElementById('players');
+      const nameInput = document.getElementById('nameInput');
+      const setNameBtn = document.getElementById('setNameBtn');
+      const readyBtn = document.getElementById('readyBtn');
+      const startBtn = document.getElementById('startBtn');
+      const lobbyIdEl = document.getElementById('lobbyId');
+      const copyBtn = document.getElementById('copyId');
+      const status = document.getElementById('status');
+
+      let myId = null;
+      let isHost = false;
+      let currentPlayers = [];
+
+      // show lobby id from query
+      try {
+        const params = new URLSearchParams(location.search);
+        const lid = params.get('lobby') || '-';
+        lobbyIdEl.textContent = lid;
+      } catch (e) { lobbyIdEl.textContent = '-'; }
+
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard?.writeText(lobbyIdEl.textContent || '')
+          .then(()=> status.textContent = 'Copied')
+          .catch(()=> status.textContent = 'Copy failed');
+      });
+
+      ws.onopen = () => {
+        status.textContent = 'Connected';
+        const stored = sessionStorage.getItem('playerName');
+        if (stored) {
+          nameInput.value = stored;
+          try {
+            ws.send(JSON.stringify({ type: 'setName', name: stored }));
+            readyBtn.disabled = false;
+          } catch (e) {
+            console.error('Failed to send name on open', e);
+          }
+        }
+      };
+
+      ws.onclose = () => { status.textContent = 'Disconnected'; };
+
+      ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'rejected') {
+          status.textContent = msg.reason || 'Rejected';
+          return;
+        }
+
+        if (msg.type === 'welcome') {
+          myId = msg.id;
+          isHost = !!msg.isHost;
+          if (isHost) startBtn.style.display = 'inline';
+        }
+
+        if (msg.type === 'lobby') {
+          currentPlayers = msg.players || [];
+          renderPlayers(currentPlayers, msg.hostId);
+          // host logic
+          if (myId === msg.hostId) {
+            startBtn.style.display = 'inline';
+            const allReady = currentPlayers.length >= 1 && currentPlayers.every(p => p.ready && p.name);
+            startBtn.disabled = !allReady;
+          } else {
+            startBtn.style.display = 'none';
+          }
+        }
+
+        if (msg.type === 'nameTaken') {
+          status.textContent = 'Name already taken';
+        }
+
+        if (msg.type === 'start') {
+          // redirect to game for this lobby
+          const params = new URLSearchParams(location.search);
+          const lid = params.get('lobby');
+          if (lid) window.location.href = '/game?lobby=' + encodeURIComponent(lid);
+        }
+      };
+
+      function renderPlayers(list, hostId){
+        playersEl.innerHTML = list.map(p => `
+          <div class="player">${p.name || '(unnamed)'} ${p.id===hostId? '👑':''} ${p.ready? '✅':''}</div>
+        `).join('');
+      }
+
+      setNameBtn.addEventListener('click', () => {
+        const name = nameInput.value.trim();
+        if (!name) return;
+        ws.send(JSON.stringify({ type: 'setName', name }));
+        sessionStorage.setItem('playerName', name);
+        readyBtn.disabled = false;
+      });
+
+      readyBtn.addEventListener('click', () => {
+        ws.send(JSON.stringify({ type: 'ready' }));
+      });
+
+      startBtn.addEventListener('click', () => {
+        ws.send(JSON.stringify({ type: 'startGame' }));
+      });
+    })();
+  </script>
+</body>
+</html>

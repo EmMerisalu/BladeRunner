@@ -16,17 +16,6 @@
 </head>
 <body>
 
-<div id="lobby">
-  <h1>BladeRunner</h1>
-  <input id="nameInput" type="text" placeholder="Enter your name" maxlength="16" />
-  <button id="setNameBtn">Set Name</button>
-  <div id="error"></div>
-  <div id="playerList"></div>
-  <button id="readyBtn" disabled>Ready</button>
-  <button id="startBtn" style="display:none" disabled>Start Game</button>
-  <div id="status">Waiting for players...</div>
-</div>
-
 <div id="game">
   <div id="ui">
     <div id="timer">Time: 0.0</div>
@@ -40,10 +29,18 @@
 <script>
   // Always create a fresh WebSocket on page load
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  ws = new WebSocket(`${protocol}//${location.host}`);
+  // include the current query string so lobby id (if present) is forwarded
+  ws = new WebSocket(`${protocol}//${location.host}${location.search}`);
 
   ws.onopen = () => {
     console.log("Connected to server");
+    // If we came from the menu, the username may be in sessionStorage — send it automatically
+    const stored = sessionStorage.getItem('playerName');
+    if (stored) {
+      ws.send(JSON.stringify({ type: 'setName', name: stored }));
+    }
+    // show waiting status until server starts the game
+    document.getElementById('timer').textContent = 'Waiting for host...';
   };
 
   ws.onclose = () => {
@@ -53,48 +50,18 @@
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
 
-    // Pass all messages to game.js handler
+    // pass messages to shared handler
     handleServerMessage(msg);
 
-    if (msg.type === "rejected") {
-      document.getElementById("status").textContent = msg.reason;
+    if (msg.type === 'rejected') {
+      // show reason on timer area
+      document.getElementById('timer').textContent = msg.reason || 'Rejected';
       return;
     }
 
-    if (msg.type === "welcome") {
-      myId = msg.id;
-      if (msg.isHost) {
-        document.getElementById("startBtn").style.display = "inline";
-      }
-    }
-
-    if (msg.type === "nameTaken") {
-      document.getElementById("error").textContent = "Name already taken!";
-    }
-
-    if (msg.type === "lobby") {
-      const list = document.getElementById("playerList");
-      list.innerHTML = msg.players.map(p =>
-        `<div class="player-entry">
-          ${p.name || "(unnamed)"}
-          ${p.id === msg.hostId ? "👑" : ""}
-          ${p.ready ? "✅" : "⬜"}
-        </div>`
-      ).join("");
-
-      if (myId === msg.hostId) {
-    document.getElementById("startBtn").style.display = "inline";
-    const allReady = msg.players.length >= 1 &&
-      msg.players.every(p => p.ready && p.name);
-    document.getElementById("startBtn").disabled = !allReady;
-  } else {
-    document.getElementById("startBtn").style.display = "none";
-  }
-}
-
-    if (msg.type === "start") {
-      document.getElementById("lobby").style.display = "none";
-      document.getElementById("game").style.display = "block";
+    if (msg.type === 'started') {
+      // server indicates game loop started — initialize the game view
+      document.getElementById('game').style.display = 'block';
       initGame();
     }
   };

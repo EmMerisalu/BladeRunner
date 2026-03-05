@@ -1,19 +1,15 @@
 const express = require("express");
 const http = require("http");
 const { WebSocketServer } = require("ws");
+const path = require("path");
+const { URL } = require('url');
 
 const app = express();
-app.use(express.static("client"));
-
-// Allow parsing JSON bodies for API endpoints
 app.use(express.json());
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-// ===============================
-// CONFIG
-// ===============================
 const CONFIG = {
   baseSpeed: 650,
   speedIncreaseInterval: 8000,
@@ -24,9 +20,6 @@ const CONFIG = {
 };
 CONFIG.tickRate = 1000 / 60;
 
-// ===============================
-// GAME STATE
-// ===============================
 function freshGameState() {
   return {
     running: false,
@@ -36,12 +29,12 @@ function freshGameState() {
     speed: CONFIG.baseSpeed,
     lastSpeedIncrease: 0,
     players: {},
-    winner: null
+    winner: null,
+    survivalTimes: {}   // id -> time when player fell (or final for survivors)
   };
 }
 
-// Support multiple lobbies keyed by lobbyId
-const lobbies = {}; // lobbyId -> { players, started, hostId, gameState, nextPlayerId, loopInterval, lastTick }
+const lobbies = {};
 
 function createLobby() {
   const id = Math.random().toString(36).slice(2, 8);
@@ -57,16 +50,11 @@ function createLobby() {
   return id;
 }
 
-// API: create a new lobby and return its URL
 app.post('/create-lobby', (req, res) => {
   const name = (req.body && req.body.name) ? String(req.body.name).trim() : null;
   const id = createLobby();
   res.json({ lobbyId: id, url: `/lobby?lobby=${id}` });
 });
-
-// ===============================
-// GAME LOOP + LOBBY-SCOPED HELPERS
-// ===============================
 
 function startGameLoopFor(lobbyId) {
   const lobby = lobbies[lobbyId];
@@ -74,7 +62,6 @@ function startGameLoopFor(lobbyId) {
   lobby.lastTick = Date.now();
   lobby.gameState.running = true;
 
-  // Avoid multiple intervals
   if (lobby.loopInterval) return;
 
   lobby.loopInterval = setInterval(() => {
@@ -109,6 +96,8 @@ function initGamePlayersFor(lobbyId) {
   const lobby = lobbies[lobbyId];
   if (!lobby) return;
   const gameState = lobby.gameState;
+  gameState.players = {};
+  gameState.survivalTimes = {};
   Object.values(lobby.players).forEach(p => {
     gameState.players[p.id] = {
       id: p.id,
@@ -123,10 +112,15 @@ function initGamePlayersFor(lobbyId) {
   });
 }
 
-function loseHP(p) {
+function loseHP(p, gameState) {
   if (p.falling) return;
   p.hp--;
-  if (p.hp <= 0) p.falling = true;
+  if (p.hp <= 0) {
+    p.falling = true;
+    if (!gameState.survivalTimes[p.id]) {
+      gameState.survivalTimes[p.id] = gameState.timer;
+    }
+  }
 }
 
 function checkWinnerLobby(lobbyId) {
@@ -139,25 +133,48 @@ function checkWinnerLobby(lobbyId) {
   const alive = all.filter(p => !p.falling);
   const fallen = all.filter(p => p.falling);
 
+  fallen.forEach(p => {
+    if (!gameState.survivalTimes[p.id]) {
+      gameState.survivalTimes[p.id] = gameState.timer;
+    }
+  });
+
   if (fallen.length === 0) return;
 
+  let gameEnded = false;
+  let winnerName = null;
+
   if (all.length === 1 && alive.length === 0) {
-    gameState.winner = "No one";
-    gameState.running = false;
-    broadcastToLobby(lobbyId, { type: "gameOver", winner: "No one" });
-    return;
+    gameEnded = true;
+    winnerName = "No one";
+  } else if (all.length > 1 && alive.length === 1) {
+    gameEnded = true;
+    winnerName = alive[0].name;
+  } else if (all.length > 1 && alive.length === 0) {
+    gameEnded = true;
+    winnerName = "No one";
   }
 
-  if (all.length > 1 && alive.length === 1) {
-    gameState.winner = alive[0].name;
-    gameState.running = false;
-    broadcastToLobby(lobbyId, { type: "gameOver", winner: gameState.winner });
-  }
+  if (gameEnded) {
+    alive.forEach(p => {
+      if (!gameState.survivalTimes[p.id]) {
+        gameState.survivalTimes[p.id] = gameState.timer;
+      }
+    });
 
-  if (all.length > 1 && alive.length === 0) {
-    gameState.winner = "No one";
+    gameState.winner = winnerName;
     gameState.running = false;
-    broadcastToLobby(lobbyId, { type: "gameOver", winner: "No one" });
+
+    const playerTimes = Object.values(gameState.players).map(p => ({
+      name: p.name,
+      time: gameState.survivalTimes[p.id] || 0
+    }));
+
+    broadcastToLobby(lobbyId, {
+      type: "gameOver",
+      winner: winnerName,
+      playerTimes
+    });
   }
 }
 
@@ -205,13 +222,7 @@ function broadcastToLobby(lobbyId, obj) {
   });
 }
 
-// ===============================
-// CONNECTIONS
-// ===============================
-const { URL } = require('url');
-
 wss.on('connection', (ws, req) => {
-  // parse lobby id from query param: ws://host/?lobby=ID
   let lobbyId = null;
   try {
     const full = new URL(req.url, `http://${req.headers.host}`);
@@ -273,9 +284,6 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-// ===============================
-// MESSAGE HANDLER (per-lobby)
-// ===============================
 function handleMessageFor(lobbyId, id, raw) {
   const lobby = lobbies[lobbyId];
   if (!lobby) return;
@@ -307,30 +315,25 @@ function handleMessageFor(lobbyId, id, raw) {
       players.every(p => p.ready);
 
     if (canStart) {
-      // mark pending start and tell clients to navigate to the game page
       lobby.pendingStart = true;
       broadcastToLobby(lobbyId, { type: 'start' });
 
-      // delay actual game initialization slightly so clients can reconnect
       setTimeout(() => {
         if (!lobby.pendingStart) return;
         lobby.pendingStart = false;
-        lobby.started = true; // officially started now
+        lobby.started = true;
         initGamePlayersFor(lobbyId);
         startGameLoopFor(lobbyId);
-        // confirm to clients that game loop has started
         broadcastToLobby(lobbyId, { type: 'started' });
       }, 800);
     }
   }
 
-  // Client reports collision — server deducts HP
   if (msg.type === 'hit') {
     const p = gameState.players[id];
-    if (p) loseHP(p);
+    if (p) loseHP(p, gameState);
   }
 
-  // Client syncs its player state to server
   if (msg.type === 'input') {
     const p = gameState.players[id];
     if (!p || p.falling) return;
@@ -359,18 +362,19 @@ function handleMessageFor(lobbyId, id, raw) {
     const playerName = gameState.players[id]?.name || lobby.players[id]?.name;
     broadcastToLobby(lobbyId, { type: 'playerQuit', name: playerName });
     const p = gameState.players[id];
-    if (p) p.falling = true;
+    if (p) {
+      if (!gameState.survivalTimes[p.id]) {
+        gameState.survivalTimes[p.id] = gameState.timer;
+      }
+      p.falling = true;
+    }
   }
 }
 
-const path = require("path");
 app.use('/', express.static(path.join(__dirname, '../client/menu')));
 app.use('/game',  express.static(path.join(__dirname, '../client/game')));
 app.use('/lobby', express.static(path.join(__dirname, '../client/lobby')));
 
-// ===============================
-// START SERVER
-// ===============================
 const PORT = 3000;
 server.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

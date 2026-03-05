@@ -1,30 +1,81 @@
 <!doctype html>
 <html lang="en">
 <head>
-	<meta charset="utf-8" />
-	<meta name="viewport" content="width=device-width,initial-scale=1" />
-	<title>Menu</title>
-	<link rel="stylesheet" href="style.css">
+<meta charset="utf-8">
+<title>Menu</title>
+<link rel="stylesheet" href="style.css">
 </head>
+
 <body>
-	<div class="wrap">
-		<div class="card">
-			<h1>Enter your username</h1>
-			<label for="username">Username (required)</label>
-			<input id="username" type="text" placeholder="Type something" autocomplete="off" />
 
-			<div class="buttons">
-				<button id="createBtn" class="create" disabled>Create Lobby</button>
-				<button id="joinBtn" class="join" disabled>Join Lobby</button>
-			</div>
+<div class="wrap">
+<div class="card">
 
-			<div class="note">Username must be non-empty. Buttons enabled when valid.</div>
-		</div>
-	</div>
+<h1>Enter your username</h1>
 
-	<script src="script.js">
-		
-	</script>
+<label for="username">Username</label>
+<input id="username" type="text" placeholder="Type something">
+
+<div class="buttons">
+<button id="createBtn" class="create" disabled>Create Lobby</button>
+<button id="joinBtn" class="join" disabled>Join Lobby</button>
+</div>
+
+</div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const input = document.getElementById('username');
+  const createBtn = document.getElementById('createBtn');
+  const joinBtn = document.getElementById('joinBtn');
+
+  function updateButtons() {
+    const ok = input.value.trim().length > 0;
+    createBtn.disabled = !ok;
+    joinBtn.disabled = !ok;
+  }
+
+  input.addEventListener('input', updateButtons);
+  updateButtons();
+
+  const saved = sessionStorage.getItem('playerName');
+  if (saved) {
+    input.value = saved;
+    updateButtons();
+  }
+
+  createBtn.addEventListener('click', async () => {
+    const name = input.value.trim();
+    if (!name) return;
+
+    try {
+      const res = await fetch('/create-lobby', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+
+      const data = await res.json();
+      sessionStorage.setItem('playerName', name);
+      window.location.href = data.url;
+    } catch (err) {
+      console.error(err);
+      alert('Failed to create lobby');
+    }
+  });
+
+  joinBtn.addEventListener('click', () => {
+    const name = input.value.trim();
+    if (!name) return;
+
+    const lobbyId = prompt('Enter lobby ID');
+    if (!lobbyId) return;
+
+    sessionStorage.setItem('playerName', name);
+    window.location.href = `/game?lobby=${encodeURIComponent(lobbyId)}`;
+  });
+});
+</script>
 </body>
 </html>
-

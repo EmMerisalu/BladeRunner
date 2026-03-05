@@ -1,99 +1,118 @@
- (function(){
-      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${protocol}//${location.host}${location.search}`);
-      const playersEl = document.getElementById('players');
-      const readyBtn = document.getElementById('readyBtn');
-      const startBtn = document.getElementById('startBtn');
-      const lobbyIdEl = document.getElementById('lobbyId');
-      const copyBtn = document.getElementById('copyId');
-      const status = document.getElementById('status');
+(function(){
 
-      let myId = null;
-      let isHost = false;
-      let currentPlayers = [];
+const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const ws = new WebSocket(`${protocol}//${location.host}${location.search}`);
 
-      // show lobby id from query
-      try {
-        const params = new URLSearchParams(location.search);
-        const lid = params.get('lobby') || '-';
-        lobbyIdEl.textContent = lid;
-      } catch (e) { lobbyIdEl.textContent = '-'; }
+const playersEl = document.getElementById('players');
+const readyBtn = document.getElementById('readyBtn');
+const startBtn = document.getElementById('startBtn');
+const lobbyIdEl = document.getElementById('lobbyId');
+const copyBtn = document.getElementById('copyId');
+const status = document.getElementById('status');
+const nameInput = document.getElementById('nameInput');
 
-      copyBtn.addEventListener('click', () => {
-        navigator.clipboard?.writeText(lobbyIdEl.textContent || '')
-          .then(()=> status.textContent = 'Copied')
-          .catch(()=> status.textContent = 'Copy failed');
-      });
+let myId = null;
+let currentPlayers = [];
 
-      ws.onopen = () => {
-        status.textContent = 'Connected';
-        const stored = sessionStorage.getItem('playerName');
-        if (stored) {
-          try {
-            ws.send(JSON.stringify({ type: 'setName', name: stored }));
-            readyBtn.disabled = false;
-          } catch (e) {
-            console.error('Failed to send name on open', e);
-          }
-        } else {
-          status.textContent = 'No player name found — please return to menu';
-          readyBtn.disabled = true;
-        }
-      };
+const params = new URLSearchParams(location.search);
+const lobbyId = params.get('lobby');
+lobbyIdEl.textContent = lobbyId || "-";
 
-      ws.onclose = () => { status.textContent = 'Disconnected'; };
+copyBtn.onclick = () => {
+navigator.clipboard.writeText(lobbyId);
+status.textContent = "Lobby ID copied";
+};
 
-      ws.onmessage = (ev) => {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === 'rejected') {
-          status.textContent = msg.reason || 'Rejected';
-          return;
-        }
+ws.onopen = () => {
+  status.textContent = "Connected";
+  const saved = sessionStorage.getItem('playerName');
+  if (saved) {
+    nameInput.value = saved;
+    ws.send(JSON.stringify({ type: "setName", name: saved }));
+    readyBtn.disabled = false;
+  }
+};
 
-        if (msg.type === 'welcome') {
-          myId = msg.id;
-          isHost = !!msg.isHost;
-          if (isHost) startBtn.style.display = 'inline';
-        }
+ws.onclose = () => {
+status.textContent = "Disconnected";
+};
 
-        if (msg.type === 'lobby') {
-          currentPlayers = msg.players || [];
-          renderPlayers(currentPlayers, msg.hostId);
-          // host logic
-          if (myId === msg.hostId) {
-            startBtn.style.display = 'inline';
-            const allReady = currentPlayers.length >= 1 && currentPlayers.every(p => p.ready && p.name);
-            startBtn.disabled = !allReady;
-          } else {
-            startBtn.style.display = 'none';
-          }
-        }
+ws.onmessage = (ev) => {
 
-        if (msg.type === 'nameTaken') {
-          status.textContent = 'Name already taken';
-        }
+const msg = JSON.parse(ev.data);
 
-        if (msg.type === 'start') {
-          // redirect to game for this lobby
-          const params = new URLSearchParams(location.search);
-          const lid = params.get('lobby');
-          if (lid) window.location.href = '/game?lobby=' + encodeURIComponent(lid);
-        }
-      };
+if(msg.type === "welcome"){
+myId = msg.id;
+if(msg.isHost){
+startBtn.style.display = "inline";
+}
+}
 
-      function renderPlayers(list, hostId){
-        playersEl.innerHTML = list.map(p => `
-          <div class="player">${p.name || '(unnamed)'} ${p.id===hostId? '👑':''} ${p.ready? '✅':''}</div>
-        `).join('');
-      }
+if(msg.type === "lobby"){
 
-      // name is set on the menu; no UI here to change it
+currentPlayers = msg.players;
 
-      readyBtn.addEventListener('click', () => {
-        ws.send(JSON.stringify({ type: 'ready' }));
-      });
+renderPlayers(msg.players,msg.hostId);
 
-      startBtn.addEventListener('click', () => {
-        ws.send(JSON.stringify({ type: 'startGame' }));
-      });
-    })();
+if(myId === msg.hostId){
+const allReady =
+msg.players.length >= 1 &&
+msg.players.every(p => p.ready && p.name);
+
+startBtn.disabled = !allReady;
+}
+}
+
+if(msg.type === "nameTaken"){
+status.textContent = "Name already taken";
+}
+
+if(msg.type === "start"){
+window.location.href = "/game?lobby=" + lobbyId;
+}
+
+};
+
+nameInput.addEventListener("change",()=>{
+const name = nameInput.value.trim();
+
+if(name.length > 0){
+ws.send(JSON.stringify({
+type:"setName",
+name
+}));
+
+sessionStorage.setItem("playerName",name);
+
+readyBtn.disabled = false;
+}
+});
+
+readyBtn.onclick = ()=>{
+ws.send(JSON.stringify({type:"ready"}));
+};
+
+startBtn.onclick = ()=>{
+ws.send(JSON.stringify({type:"startGame"}));
+};
+
+function renderPlayers(players,hostId){
+
+playersEl.innerHTML = players.map(p=>{
+
+const readyIcon = p.ready ? "🟢" : "⚪";
+const crown = p.id === hostId ? "👑" : "";
+
+return `
+<div class="player">
+<span class="status">${readyIcon}</span>
+<span class="name">${p.name || "(unnamed)"}</span>
+<span class="host">${crown}</span>
+</div>
+`;
+
+}).join("");
+
+}
+
+})();

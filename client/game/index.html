@@ -5,7 +5,7 @@
   <title>BladeRunner</title>
   <style>
     body { margin: 0; background: #111; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; }
-    #lobby { text-align: center; }
+    #lobby { text-align: center; display: none; }  /* ← hides old lobby */
     input, button { padding: 8px 16px; margin: 6px; font-size: 16px; }
     #playerList { margin: 16px 0; min-height: 80px; }
     .player-entry { margin: 4px 0; }
@@ -15,6 +15,17 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+
+<div id="lobby">
+  <h2>Lobby</h2>
+  <input id="nameInput" placeholder="Enter your name" />
+  <button id="setNameBtn">Set Name</button>
+  <button id="readyBtn" disabled>Ready</button>
+  <button id="startBtn">Start Game</button>
+  <div id="playerList"></div>
+  <div id="status"></div>
+  <div id="error"></div>
+</div>
 
 <div id="game">
   <div id="ui">
@@ -29,17 +40,14 @@
 <script>
   // Always create a fresh WebSocket on page load
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  // include the current query string so lobby id (if present) is forwarded
   ws = new WebSocket(`${protocol}//${location.host}${location.search}`);
 
   ws.onopen = () => {
     console.log("Connected to server");
-    // If we came from the menu, the username may be in sessionStorage — send it automatically
     const stored = sessionStorage.getItem('playerName');
     if (stored) {
       ws.send(JSON.stringify({ type: 'setName', name: stored }));
     }
-    // show waiting status until server starts the game
     document.getElementById('timer').textContent = 'Waiting for host...';
   };
 
@@ -49,20 +57,21 @@
 
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
-
-    // pass messages to shared handler
     handleServerMessage(msg);
 
     if (msg.type === 'rejected') {
-      // show reason on timer area
       document.getElementById('timer').textContent = msg.reason || 'Rejected';
       return;
     }
 
     if (msg.type === 'started') {
-      // server indicates game loop started — initialize the game view
+      document.getElementById('lobby').style.display = 'none';
       document.getElementById('game').style.display = 'block';
       initGame();
+    }
+
+    if (msg.type === 'gameOver') {
+      showGameOver(msg.winner || "No one", msg.playerTimes || []);
     }
   };
 
@@ -81,6 +90,81 @@
   document.getElementById("startBtn").onclick = () => {
     ws.send(JSON.stringify({ type: "startGame" }));
   };
+
+  // Enhanced game‑over overlay with survival times leaderboard
+  function showGameOver(winner, playerTimes = []) {
+    const overlay = document.createElement("div");
+    overlay.id = "gameOverOverlay";
+    overlay.style = `
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.9);
+      display: flex; justify-content: center; align-items: center;
+      z-index: 200; flex-direction: column; color: white;
+      font-family: sans-serif;
+    `;
+
+    const winnerMsg = document.createElement("div");
+    winnerMsg.style.fontSize = "36px";
+    winnerMsg.style.marginBottom = "16px";
+    winnerMsg.style.color = "gold";
+    winnerMsg.textContent = winner === "No one" ? "It's a draw!" : `🏆 ${winner} wins!`;
+    overlay.appendChild(winnerMsg);
+
+    if (playerTimes.length > 0) {
+      const table = document.createElement("div");
+      table.style.margin = "20px 0";
+      table.style.width = "300px";
+      table.style.background = "#222";
+      table.style.borderRadius = "8px";
+      table.style.padding = "10px";
+
+      const header = document.createElement("div");
+      header.style.display = "flex";
+      header.style.justifyContent = "space-between";
+      header.style.fontWeight = "bold";
+      header.style.padding = "5px 10px";
+      header.style.borderBottom = "1px solid #444";
+      header.innerHTML = "<span>Player</span><span>Time</span>";
+      table.appendChild(header);
+
+      const sorted = [...playerTimes].sort((a, b) => b.time - a.time);
+      sorted.forEach(p => {
+        const row = document.createElement("div");
+        row.style.display = "flex";
+        row.style.justifyContent = "space-between";
+        row.style.padding = "5px 10px";
+        row.innerHTML = `<span>${p.name}</span><span>${p.time.toFixed(1)}s</span>`;
+        table.appendChild(row);
+      });
+
+      overlay.appendChild(table);
+    }
+
+    const btn = document.createElement("button");
+    btn.textContent = "Back to Lobby";
+    btn.style = `
+      margin-top: 24px;
+      padding: 12px 32px;
+      font-size: 18px;
+      background: gold;
+      color: black;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    `;
+    btn.onclick = () => {
+      const params = new URLSearchParams(window.location.search);
+      const lobbyId = params.get('lobby');
+      if (lobbyId) {
+        window.location.href = `/lobby/?lobby=${encodeURIComponent(lobbyId)}`;
+      } else {
+        window.location.href = '/';
+      }
+    };
+    overlay.appendChild(btn);
+
+    document.body.appendChild(overlay);
+  }
 </script>
 </body>
 </html>

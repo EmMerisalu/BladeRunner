@@ -4,28 +4,12 @@
   <meta charset="UTF-8" />
   <title>BladeRunner</title>
   <style>
-    body { margin: 0; background: #111; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; }
-    #lobby { text-align: center; display: none; }  /* ← hides old lobby */
-    input, button { padding: 8px 16px; margin: 6px; font-size: 16px; }
-    #playerList { margin: 16px 0; min-height: 80px; }
-    .player-entry { margin: 4px 0; }
-    #error { color: tomato; min-height: 20px; }
+    body { margin: 0; background: #111; color: white; font-family: sans-serif; }
     #game { display: none; position: fixed; inset: 0; }
   </style>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-
-<div id="lobby">
-  <h2>Lobby</h2>
-  <input id="nameInput" placeholder="Enter your name" />
-  <button id="setNameBtn">Set Name</button>
-  <button id="readyBtn" disabled>Ready</button>
-  <button id="startBtn">Start Game</button>
-  <div id="playerList"></div>
-  <div id="status"></div>
-  <div id="error"></div>
-</div>
 
 <div id="game">
   <div id="ui">
@@ -38,21 +22,16 @@
 
 <script src="game.js"></script>
 <script>
-  // Always create a fresh WebSocket on page load
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   ws = new WebSocket(`${protocol}//${location.host}${location.search}`);
 
   ws.onopen = () => {
     console.log("Connected to server");
-    const stored = sessionStorage.getItem('playerName');
-    if (stored) {
-      ws.send(JSON.stringify({ type: 'setName', name: stored }));
-    }
-    document.getElementById('timer').textContent = 'Waiting for host...';
+    document.getElementById('timer').textContent = 'Connecting...';
   };
 
   ws.onclose = () => {
-    document.getElementById("status").textContent = "Disconnected from server. Please refresh.";
+    document.getElementById('timer').textContent = "Disconnected. Please refresh.";
   };
 
   ws.onmessage = (event) => {
@@ -65,31 +44,10 @@
     }
 
     if (msg.type === 'started') {
-      document.getElementById('lobby').style.display = 'none';
       document.getElementById('game').style.display = 'block';
       initGame();
     }
-
-
   };
-
-  document.getElementById("setNameBtn").onclick = () => {
-    const name = document.getElementById("nameInput").value.trim();
-    if (!name) return;
-    document.getElementById("error").textContent = "";
-    ws.send(JSON.stringify({ type: "setName", name }));
-    document.getElementById("readyBtn").disabled = false;
-  };
-
-  document.getElementById("readyBtn").onclick = () => {
-    ws.send(JSON.stringify({ type: "ready" }));
-  };
-
-  document.getElementById("startBtn").onclick = () => {
-    ws.send(JSON.stringify({ type: "startGame" }));
-  };
-
-
 </script>
 </body>
 </html>

@@ -2,12 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Menu</title>
+<title>BladeRunner</title>
 <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
-
 <div class="wrap">
 <div class="card">
 
@@ -48,14 +46,12 @@ document.addEventListener('DOMContentLoaded', () => {
   createBtn.addEventListener('click', async () => {
     const name = input.value.trim();
     if (!name) return;
-
     try {
       const res = await fetch('/create-lobby', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name })
       });
-
       const data = await res.json();
       sessionStorage.setItem('playerName', name);
       window.location.href = data.url;
@@ -68,12 +64,10 @@ document.addEventListener('DOMContentLoaded', () => {
   joinBtn.addEventListener('click', () => {
     const name = input.value.trim();
     if (!name) return;
-
     const lobbyId = prompt('Enter lobby ID');
     if (!lobbyId) return;
-
     sessionStorage.setItem('playerName', name);
-    window.location.href = `/game?lobby=${encodeURIComponent(lobbyId)}`;
+    window.location.href = `/lobby?lobby=${encodeURIComponent(lobbyId)}`;
   });
 });
 </script>

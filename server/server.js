@@ -222,6 +222,13 @@ function checkWinnerLobby(lobbyId) {
       winner: winnerName,
       playerTimes
     });
+
+    // Reset lobby so players can start another game
+    lobby.started = false;
+    if (lobby.loopInterval) {
+      clearInterval(lobby.loopInterval);
+      lobby.loopInterval = null;
+    }
   }
 }
 
@@ -271,9 +278,11 @@ function broadcastToLobby(lobbyId, obj) {
 
 wss.on('connection', (ws, req) => {
   let lobbyId = null;
+  let pid = null;
   try {
     const full = new URL(req.url, `http://${req.headers.host}`);
     lobbyId = full.searchParams.get('lobby');
+    pid = full.searchParams.get('pid');
   } catch (e) { /* ignore */ }
 
   if (!lobbyId || !lobbies[lobbyId]) {
@@ -283,6 +292,51 @@ wss.on('connection', (ws, req) => {
   }
 
   const lobby = lobbies[lobbyId];
+
+  // Reconnect: player is returning to game page after lobby redirect
+  if (lobby.started && pid) {
+    const numPid = Number(pid);
+    const gamePlayer = lobby.gameState.players[numPid];
+    const lobbyPlayer = lobby.players[numPid];
+
+    if (!gamePlayer) {
+      ws.send(JSON.stringify({ type: 'rejected', reason: 'Player not found in game' }));
+      ws.close();
+      return;
+    }
+
+    // Update the stored WebSocket to the new connection
+    // Re-add to lobby.players so broadcastToLobby can reach them
+    lobby.players[numPid] = {
+      id: numPid,
+      name: gamePlayer.name,
+      ready: true,
+      track: gamePlayer.track,
+      ws
+    };
+
+    ws.send(JSON.stringify({ type: 'welcome', id: numPid, track: gamePlayer.track, isHost: lobby.hostId === numPid }));
+    ws.send(JSON.stringify({ type: 'started' }));
+
+    ws.on('message', (raw) => handleMessageFor(lobbyId, numPid, raw));
+
+    ws.on('close', () => {
+      if (lobby.players[numPid]) delete lobby.players[numPid];
+      if (Object.keys(lobby.players).length === 0) {
+        lobby.started = false;
+        lobby.hostId = null;
+        lobby.gameState = freshGameState();
+        if (lobby.loopInterval) {
+          clearInterval(lobby.loopInterval);
+          lobby.loopInterval = null;
+        }
+        console.log(`All players left — lobby ${lobbyId} reset`);
+      }
+      broadcastLobbyFor(lobbyId);
+    });
+
+    return;
+  }
 
   if (lobby.started && !lobby.gameState.winner) {
     ws.send(JSON.stringify({ type: 'rejected', reason: 'Game already started' }));
@@ -316,8 +370,7 @@ wss.on('connection', (ws, req) => {
       lobby.hostId = remaining.length > 0 ? Number(remaining[0]) : null;
     }
 
-    if (Object.keys(lobby.players).length === 0) {
-      lobby.started = false;
+    if (Object.keys(lobby.players).length === 0 && !lobby.started) {
       lobby.hostId = null;
       lobby.gameState = freshGameState();
       if (lobby.loopInterval) {
@@ -362,16 +415,19 @@ function handleMessageFor(lobbyId, id, raw) {
       players.every(p => p.ready);
 
     if (canStart) {
+      // Reassign tracks sequentially so there are no gaps
+      Object.values(lobby.players).forEach((p, i) => { p.track = i; });
+      lobby.gameState = freshGameState();
       lobby.pendingStart = true;
+      lobby.started = true;
+      initGamePlayersFor(lobbyId);
+      lobby.gameState.nextSpawnInterval = getRandomSpawnInterval(lobby.gameState.speed);
+      startGameLoopFor(lobbyId);
       broadcastToLobby(lobbyId, { type: 'start' });
 
       setTimeout(() => {
         if (!lobby.pendingStart) return;
         lobby.pendingStart = false;
-        lobby.started = true;
-        initGamePlayersFor(lobbyId);
-        lobby.gameState.nextSpawnInterval = getRandomSpawnInterval(lobby.gameState.speed);
-        startGameLoopFor(lobbyId);
         broadcastToLobby(lobbyId, { type: 'started' });
       }, 800);
     }

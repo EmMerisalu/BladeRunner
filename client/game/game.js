@@ -52,12 +52,6 @@ const gameEl = document.getElementById("gameArea");
 // ===============================
 // WEBSOCKET
 // ===============================
-function connectWebSocket() {
-  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  ws = new WebSocket(`${protocol}//${location.host}`);
-  ws.onclose = () => showNotification("Disconnected from server. Please refresh.");
-}
-
 function sendInput(action) {
   if (ws && ws.readyState === 1) {
     ws.send(JSON.stringify({ type: "input", action }));
@@ -83,6 +77,7 @@ function handleServerMessage(msg) {
         players[sp.id].hp = sp.hp;
         players[sp.id].maxHp = sp.maxHp;
         players[sp.id].falling = sp.falling;
+        players[sp.id].track = sp.track;
 
         if (sp.id !== myId) {
           players[sp.id].lane = sp.lane;
@@ -115,15 +110,31 @@ function handleServerMessage(msg) {
 }
 
 // ===============================
+// SCALE GAME AREA TO FIT ALL TRACKS
+// ===============================
+function scaleGameArea() {
+  const trackCount = Object.keys(players).length;
+  const totalHeight = trackCount * (CONFIG.lanesPerTrack * CONFIG.laneHeight + CONFIG.trackSpacing) - CONFIG.trackSpacing;
+  const scaleY = Math.min(1, window.innerHeight / totalHeight);
+  const scaleX = scaleY;
+  const el = document.getElementById("gameArea");
+  el.style.transformOrigin = "top left";
+  el.style.transform = `scale(${scaleX}, ${scaleY})`;
+  const unscaledWidth = window.innerWidth / scaleX;
+  el.style.width = unscaledWidth + "px";
+  CONFIG.gameWidth = unscaledWidth;
+}
+
+// ===============================
 // INIT GAME
 // ===============================
 function initGame() {
-  createTrackLines();
-
   const waitForPlayers = setInterval(() => {
     if (myId !== null && serverPlayers[myId]) {
       clearInterval(waitForPlayers);
       setupPlayers();
+      createTrackLines();
+      scaleGameArea();
       state.running = true;
       startRenderLoop();
     }
@@ -200,7 +211,8 @@ function createPlayer(id, track) {
 // ===============================
 function createTrackLines() {
   const container = document.getElementById("trackLines");
-  for (let t = 0; t < CONFIG.trackCount; t++) {
+  const trackCount = Object.keys(serverPlayers).length;
+  for (let t = 0; t < trackCount; t++) {
     const trackTop = t * (CONFIG.lanesPerTrack * CONFIG.laneHeight + CONFIG.trackSpacing);
     for (let i = 1; i < CONFIG.lanesPerTrack; i++) {
       const line = document.createElement("div");
@@ -292,7 +304,7 @@ function spawnRedObstacle(track, lane, serverId) {
     serverId,
     track,
     lane,
-    x: window.innerWidth,
+    x: CONFIG.gameWidth || window.innerWidth,
     width: CONFIG.obstacleWidth,
     el,
     hit: false
@@ -316,7 +328,7 @@ function spawnBlueObstacleSet(track, direction, serverId) {
     kind: "blue",
     serverId,
     track,
-    x: window.innerWidth,
+    x: CONFIG.gameWidth || window.innerWidth,
     group,
     width: CONFIG.obstacleWidth,
     direction,
@@ -575,7 +587,7 @@ function showGameOver(winner, playerTimes = []) {
     const params = new URLSearchParams(window.location.search);
     const lobbyId = params.get('lobby');
     if (lobbyId) {
-      window.location.href = `/lobby/?lobby=${encodeURIComponent(lobbyId)}`;
+      window.location.href = `/lobby?lobby=${encodeURIComponent(lobbyId)}`;
     } else {
       window.location.href = '/';
     }

@@ -68,7 +68,7 @@ status.textContent = "Name already taken";
 }
 
 if(msg.type === "start"){
-window.location.href = "/game?lobby=" + lobbyId;
+window.location.href = "/game?lobby=" + lobbyId + "&pid=" + myId;
 }
 
 };

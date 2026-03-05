@@ -70,9 +70,7 @@
       initGame();
     }
 
-    if (msg.type === 'gameOver') {
-      showGameOver(msg.winner || "No one", msg.playerTimes || []);
-    }
+
   };
 
   document.getElementById("setNameBtn").onclick = () => {
@@ -91,80 +89,7 @@
     ws.send(JSON.stringify({ type: "startGame" }));
   };
 
-  // Enhanced game‑over overlay with survival times leaderboard
-  function showGameOver(winner, playerTimes = []) {
-    const overlay = document.createElement("div");
-    overlay.id = "gameOverOverlay";
-    overlay.style = `
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,0.9);
-      display: flex; justify-content: center; align-items: center;
-      z-index: 200; flex-direction: column; color: white;
-      font-family: sans-serif;
-    `;
 
-    const winnerMsg = document.createElement("div");
-    winnerMsg.style.fontSize = "36px";
-    winnerMsg.style.marginBottom = "16px";
-    winnerMsg.style.color = "gold";
-    winnerMsg.textContent = winner === "No one" ? "It's a draw!" : `🏆 ${winner} wins!`;
-    overlay.appendChild(winnerMsg);
-
-    if (playerTimes.length > 0) {
-      const table = document.createElement("div");
-      table.style.margin = "20px 0";
-      table.style.width = "300px";
-      table.style.background = "#222";
-      table.style.borderRadius = "8px";
-      table.style.padding = "10px";
-
-      const header = document.createElement("div");
-      header.style.display = "flex";
-      header.style.justifyContent = "space-between";
-      header.style.fontWeight = "bold";
-      header.style.padding = "5px 10px";
-      header.style.borderBottom = "1px solid #444";
-      header.innerHTML = "<span>Player</span><span>Time</span>";
-      table.appendChild(header);
-
-      const sorted = [...playerTimes].sort((a, b) => b.time - a.time);
-      sorted.forEach(p => {
-        const row = document.createElement("div");
-        row.style.display = "flex";
-        row.style.justifyContent = "space-between";
-        row.style.padding = "5px 10px";
-        row.innerHTML = `<span>${p.name}</span><span>${p.time.toFixed(1)}s</span>`;
-        table.appendChild(row);
-      });
-
-      overlay.appendChild(table);
-    }
-
-    const btn = document.createElement("button");
-    btn.textContent = "Back to Lobby";
-    btn.style = `
-      margin-top: 24px;
-      padding: 12px 32px;
-      font-size: 18px;
-      background: gold;
-      color: black;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-    `;
-    btn.onclick = () => {
-      const params = new URLSearchParams(window.location.search);
-      const lobbyId = params.get('lobby');
-      if (lobbyId) {
-        window.location.href = `/lobby/?lobby=${encodeURIComponent(lobbyId)}`;
-      } else {
-        window.location.href = '/';
-      }
-    };
-    overlay.appendChild(btn);
-
-    document.body.appendChild(overlay);
-  }
 </script>
 </body>
 </html>

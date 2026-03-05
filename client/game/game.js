@@ -42,10 +42,6 @@ let state = {
   running: false,
   speed: CONFIG.baseSpeed,
   timer: 0,
-  lastSpawn: 0,
-  lastSpeedIncrease: 0,
-  nextSpawnInterval: 0,
-  lastBlueSpawn: -9999,
   paused: false
 };
 
@@ -105,6 +101,14 @@ function handleServerMessage(msg) {
     showGameOver(msg.winner || "No one", msg.playerTimes || []);
   }
 
+  if (msg.type === "spawnObstacle") {
+    if (msg.kind === "red") {
+      spawnRedObstacle(msg.track, msg.lane, msg.id);
+    } else if (msg.kind === "blue") {
+      spawnBlueObstacleSet(msg.track, msg.direction, msg.id);
+    }
+  }
+
   if (msg.type === "playerQuit") {
     showNotification(`${msg.name} has quit`);
   }
@@ -115,7 +119,6 @@ function handleServerMessage(msg) {
 // ===============================
 function initGame() {
   createTrackLines();
-  state.nextSpawnInterval = getRandomSpawnInterval();
 
   const waitForPlayers = setInterval(() => {
     if (myId !== null && serverPlayers[myId]) {
@@ -180,6 +183,7 @@ function createPlayer(id, track) {
   indicator.appendChild(handEmoji);
   gameEl.appendChild(indicator);
   p.indicatorEl = indicator;
+  p.handEmojiEl = handEmoji;
 
   const nameTag = document.createElement("div");
   nameTag.classList.add("name-tag");
@@ -236,22 +240,8 @@ function startRenderLoop() {
 // UPDATE
 // ===============================
 function update(delta) {
-  state.lastSpawn += delta * 1000;
-  state.lastSpeedIncrease += delta * 1000;
-
-  if (state.lastSpeedIncrease >= CONFIG.speedIncreaseInterval) {
-    state.speed += CONFIG.speedIncreaseAmount;
-    state.lastSpeedIncrease = 0;
-  }
-
   Object.values(players).forEach(p => updatePlayer(p, delta));
   updateObstacles(delta);
-
-  if (state.lastSpawn >= state.nextSpawnInterval) {
-    spawnRandomPattern();
-    state.lastSpawn = 0;
-    state.nextSpawnInterval = getRandomSpawnInterval();
-  }
 }
 
 // ===============================
@@ -279,35 +269,18 @@ function updatePlayer(p, delta) {
   const targetY = getTrackTop(p.track) + p.lane * CONFIG.laneHeight;
   p.renderY = lerp(p.renderY ?? targetY, targetY, Math.min(1, delta * 155));
   p.hpY = lerp(p.hpY ?? targetY, targetY, Math.min(1, delta * 15));
-}
 
-// ===============================
-// SPAWNING
-// ===============================
-function getRandomSpawnInterval() {
-  const chaos = Math.random() ** 2;
-  const speedFactor = Math.max(0.5, 1 - state.speed / 3000);
-  return (CONFIG.spawnIntervalMin +
-    chaos * (CONFIG.spawnIntervalMax - CONFIG.spawnIntervalMin)) * speedFactor;
-}
-
-function spawnRandomPattern() {
-  const now = state.timer * 1000;
-  const allowBlue = now - state.lastBlueSpawn > CONFIG.minBlueGap;
-  const activeTracks = Object.values(players).map(p => p.track);
-
-  if (Math.random() < 0.6 || !allowBlue) {
-    activeTracks.forEach(t => {
-      const lane = Math.floor(Math.random() * 3);
-      spawnRedObstacle(t, lane);
-    });
-  } else {
-    activeTracks.forEach(t => spawnBlueObstacleSet(t));
-    state.lastBlueSpawn = now;
+  // Update indicator renderY here where delta is available
+  const ind = p.indicatorEl;
+  if (ind) {
+    ind.renderY = lerp(ind.renderY ?? p.renderY, p.renderY, 1 - Math.pow(0.001, delta));
   }
 }
 
-function spawnRedObstacle(track, lane) {
+// ===============================
+// SPAWNING (called by server events)
+// ===============================
+function spawnRedObstacle(track, lane, serverId) {
   const el = document.createElement("div");
   el.classList.add("obstacle", "red");
   el.style.width = CONFIG.obstacleWidth + "px";
@@ -316,18 +289,17 @@ function spawnRedObstacle(track, lane) {
 
   obstacles.push({
     kind: "red",
+    serverId,
     track,
     lane,
     x: window.innerWidth,
-    renderX: window.innerWidth,
     width: CONFIG.obstacleWidth,
     el,
     hit: false
   });
 }
 
-function spawnBlueObstacleSet(track) {
-  const direction = Math.random() > 0.5 ? "left" : "right";
+function spawnBlueObstacleSet(track, direction, serverId) {
   const group = [];
 
   for (let lane = 0; lane < CONFIG.lanesPerTrack; lane++) {
@@ -342,9 +314,9 @@ function spawnBlueObstacleSet(track) {
 
   obstacles.push({
     kind: "blue",
+    serverId,
     track,
     x: window.innerWidth,
-    renderX: window.innerWidth,
     group,
     width: CONFIG.obstacleWidth,
     direction,
@@ -364,11 +336,10 @@ function updateObstacles(delta) {
 
   obstacles = obstacles.filter(ob => {
     ob.x -= move;
-    ob.renderX = lerp(ob.renderX ?? ob.x, ob.x, 0.6);
 
     if (ob.kind === "red") {
       ob.el.style.top = getTrackTop(ob.track) + ob.lane * CONFIG.laneHeight + "px";
-      ob.el.style.left = ob.renderX + "px";
+      ob.el.style.left = ob.x + "px";
 
       const myPlayer = players[myId];
       if (myPlayer && myPlayer.track === ob.track && myPlayer.lane === ob.lane && !ob.hit && !myPlayer.falling) {
@@ -403,7 +374,7 @@ function updateObstacles(delta) {
     if (ob.kind === "blue") {
       ob.group.forEach(g => {
         g.el.style.top = getTrackTop(ob.track) + g.lane * CONFIG.laneHeight + "px";
-        g.el.style.left = ob.renderX + "px";
+        g.el.style.left = ob.x + "px";
       });
 
       const myPlayer = players[myId];
@@ -462,15 +433,13 @@ function render() {
     const ind = p.indicatorEl;
     if (!p.falling && p.dodge) {
       ind.style.display = "block";
-      ind.renderY = lerp(ind.renderY ?? p.renderY, p.renderY, 0.25);
-      ind.style.top = ind.renderY + CONFIG.laneHeight * 0.2 + "px";
-      const handEmoji = ind.querySelector(".hand-emoji");
+      ind.style.top = (ind.renderY ?? p.renderY) + CONFIG.laneHeight * 0.2 + "px";
       if (p.dodge === "left") {
         ind.style.left = p.x - 22 + "px";
-        handEmoji.style.transform = "rotate(-15deg)";
+        p.handEmojiEl.style.transform = "rotate(-15deg)";
       } else {
         ind.style.left = p.x + p.width + "px";
-        handEmoji.style.transform = "rotate(15deg)";
+        p.handEmojiEl.style.transform = "rotate(15deg)";
       }
     } else {
       ind.style.display = "none";
@@ -478,7 +447,7 @@ function render() {
   });
 
   const timerEl = document.getElementById("timer");
-  if (timerEl) timerEl.innerText = "Time: " + state.timer.toFixed(1);
+  if (timerEl) timerEl.textContent = "Time: " + state.timer.toFixed(1);
 
   let scoreboard = document.getElementById("scoreboard");
   if (!scoreboard) {
@@ -486,11 +455,21 @@ function render() {
     scoreboard.id = "scoreboard";
     document.getElementById("ui").appendChild(scoreboard);
   }
-  scoreboard.innerHTML = Object.values(serverPlayers).map(sp =>
-    `<div style="color:${PLAYER_COLORS[sp.track]};${sp.id === myId ? "font-weight:bold" : ""}">
-      ${sp.name}: ${"❤️".repeat(Math.max(0, sp.hp))}${"🖤".repeat(sp.maxHp - Math.max(0, sp.hp))}
-    </div>`
-  ).join("");
+
+  // Build/update scoreboard rows without rebuilding innerHTML every frame
+  Object.values(serverPlayers).forEach(sp => {
+    let row = document.getElementById("sb-" + sp.id);
+    if (!row) {
+      row = document.createElement("div");
+      row.id = "sb-" + sp.id;
+      row.style.color = PLAYER_COLORS[sp.track];
+      if (sp.id === myId) row.style.fontWeight = "bold";
+      scoreboard.appendChild(row);
+    }
+    const hearts = "❤️".repeat(Math.max(0, sp.hp)) + "🖤".repeat(sp.maxHp - Math.max(0, sp.hp));
+    const newText = `${sp.name}: ${hearts}`;
+    if (row.textContent !== newText) row.textContent = newText;
+  });
 }
 
 // ===============================

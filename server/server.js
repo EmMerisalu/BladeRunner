@@ -16,7 +16,10 @@ const CONFIG = {
   speedIncreaseAmount: 60,
   lanesPerTrack: 3,
   playerX: 150,
-  playerWidth: 40
+  playerWidth: 40,
+  spawnIntervalMin: 250,
+  spawnIntervalMax: 900,
+  minBlueGap: 900
 };
 CONFIG.tickRate = 1000 / 60;
 
@@ -30,7 +33,11 @@ function freshGameState() {
     lastSpeedIncrease: 0,
     players: {},
     winner: null,
-    survivalTimes: {}   // id -> time when player fell (or final for survivors)
+    survivalTimes: {},
+    lastSpawn: 0,
+    nextSpawnInterval: 0,
+    lastBlueSpawn: -9999,
+    nextObstacleId: 1
   };
 }
 
@@ -76,6 +83,13 @@ function startGameLoopFor(lobbyId) {
   }, CONFIG.tickRate);
 }
 
+function getRandomSpawnInterval(speed) {
+  const chaos = Math.random() ** 2;
+  const speedFactor = Math.max(0.5, 1 - speed / 3000);
+  return (CONFIG.spawnIntervalMin +
+    chaos * (CONFIG.spawnIntervalMax - CONFIG.spawnIntervalMin)) * speedFactor;
+}
+
 function tickLobby(lobbyId, delta) {
   const lobby = lobbies[lobbyId];
   if (!lobby) return;
@@ -88,8 +102,41 @@ function tickLobby(lobbyId, delta) {
     gameState.lastSpeedIncrease = 0;
   }
 
+  // Server-authoritative obstacle spawning
+  gameState.lastSpawn += delta * 1000;
+  if (gameState.lastSpawn >= gameState.nextSpawnInterval) {
+    spawnObstaclesFor(lobbyId);
+    gameState.lastSpawn = 0;
+    gameState.nextSpawnInterval = getRandomSpawnInterval(gameState.speed);
+  }
+
   checkWinnerLobby(lobbyId);
   broadcastGameStateFor(lobbyId);
+}
+
+function spawnObstaclesFor(lobbyId) {
+  const lobby = lobbies[lobbyId];
+  if (!lobby) return;
+  const gameState = lobby.gameState;
+
+  const now = gameState.timer * 1000;
+  const allowBlue = now - gameState.lastBlueSpawn > CONFIG.minBlueGap;
+  const activeTracks = Object.values(gameState.players).map(p => p.track);
+
+  if (Math.random() < 0.6 || !allowBlue) {
+    activeTracks.forEach(track => {
+      const lane = Math.floor(Math.random() * CONFIG.lanesPerTrack);
+      const id = gameState.nextObstacleId++;
+      broadcastToLobby(lobbyId, { type: 'spawnObstacle', kind: 'red', id, track, lane });
+    });
+  } else {
+    const direction = Math.random() > 0.5 ? 'left' : 'right';
+    const id = gameState.nextObstacleId++;
+    activeTracks.forEach(track => {
+      broadcastToLobby(lobbyId, { type: 'spawnObstacle', kind: 'blue', id, track, direction });
+    });
+    gameState.lastBlueSpawn = now;
+  }
 }
 
 function initGamePlayersFor(lobbyId) {
@@ -323,6 +370,7 @@ function handleMessageFor(lobbyId, id, raw) {
         lobby.pendingStart = false;
         lobby.started = true;
         initGamePlayersFor(lobbyId);
+        lobby.gameState.nextSpawnInterval = getRandomSpawnInterval(lobby.gameState.speed);
         startGameLoopFor(lobbyId);
         broadcastToLobby(lobbyId, { type: 'started' });
       }, 800);

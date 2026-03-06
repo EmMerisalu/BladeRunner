@@ -19,7 +19,13 @@ const CONFIG = {
   playerWidth: 40,
   spawnIntervalMin: 250,
   spawnIntervalMax: 900,
-  minBlueGap: 900
+  minBlueGap: 900,
+  // ---------- added for server‑side collision ----------
+  gameWidth: 2000,               // logical width, must match client
+  blueHitWindow: 110,
+  blueForgiveness: 40,
+  obstacleWidth: 40
+  // -----------------------------------------------------
 };
 CONFIG.tickRate = 1000 / 60;
 
@@ -37,7 +43,11 @@ function freshGameState() {
     lastSpawn: 0,
     nextSpawnInterval: 0,
     lastBlueSpawn: -9999,
-    nextObstacleId: 1
+    nextObstacleId: 1,
+    // ---------- added for server‑side obstacle tracking ----------
+    obstacles: [],      // red obstacles
+    blueSets: []        // blue obstacle sets
+    // -------------------------------------------------------------
   };
 }
 
@@ -102,13 +112,63 @@ function tickLobby(lobbyId, delta) {
     gameState.lastSpeedIncrease = 0;
   }
 
-  // Server-authoritative obstacle spawning
+  // ---------- obstacle movement ----------
+  const speed = gameState.speed;
+  gameState.obstacles.forEach(ob => ob.x -= speed * delta);
+  gameState.blueSets.forEach(bs => bs.x -= speed * delta);
+
+  // remove off‑screen obstacles
+  gameState.obstacles = gameState.obstacles.filter(ob => ob.x > -ob.width);
+  gameState.blueSets = gameState.blueSets.filter(bs => bs.x > -bs.width);
+  // ---------------------------------------
+
+  // ---------- red obstacle collision ----------
+  for (const ob of gameState.obstacles) {
+    for (const p of Object.values(gameState.players)) {
+      if (p.falling) continue;
+      if (p.track !== ob.track || p.lane !== ob.lane) continue;
+
+      const playerLeft = CONFIG.playerX;
+      const playerRight = CONFIG.playerX + CONFIG.playerWidth;
+      const obLeft = ob.x;
+      const obRight = ob.x + ob.width;
+
+      if (playerRight > obLeft && playerLeft < obRight) {
+        loseHP(p, gameState);
+        ob.hit = true;   // mark for removal
+        break;
+      }
+    }
+  }
+  gameState.obstacles = gameState.obstacles.filter(ob => !ob.hit);
+  // --------------------------------------------
+
+  // ---------- blue set collision ----------
+  for (const bs of gameState.blueSets) {
+    for (const p of Object.values(gameState.players)) {
+      if (p.falling) continue;
+      if (p.track !== bs.track) continue;
+      if (bs.processedPlayers.has(p.id)) continue;
+
+      const dist = bs.x - CONFIG.playerX;
+      if (dist < CONFIG.blueHitWindow && dist > -CONFIG.blueForgiveness) {
+        bs.processedPlayers.add(p.id);
+        if (p.dodge !== bs.direction) {
+          loseHP(p, gameState);
+        }
+      }
+    }
+  }
+  // ----------------------------------------
+
+  // ---------- spawning (unchanged except we now store obstacles) ----------
   gameState.lastSpawn += delta * 1000;
   if (gameState.lastSpawn >= gameState.nextSpawnInterval) {
     spawnObstaclesFor(lobbyId);
     gameState.lastSpawn = 0;
     gameState.nextSpawnInterval = getRandomSpawnInterval(gameState.speed);
   }
+  // -------------------------------------------------------------------------
 
   checkWinnerLobby(lobbyId);
   broadcastGameStateFor(lobbyId);
@@ -124,16 +184,51 @@ function spawnObstaclesFor(lobbyId) {
   const activeTracks = Object.values(gameState.players).map(p => p.track);
 
   if (Math.random() < 0.6 || !allowBlue) {
+    // spawn red obstacles for each active track
     activeTracks.forEach(track => {
       const lane = Math.floor(Math.random() * CONFIG.lanesPerTrack);
       const id = gameState.nextObstacleId++;
-      broadcastToLobby(lobbyId, { type: 'spawnObstacle', kind: 'red', id, track, lane });
+      const obstacle = {
+        id,
+        kind: 'red',
+        track,
+        lane,
+        x: CONFIG.gameWidth,
+        width: CONFIG.obstacleWidth
+      };
+      gameState.obstacles.push(obstacle);
+      broadcastToLobby(lobbyId, {
+        type: 'spawnObstacle',
+        kind: 'red',
+        id,
+        track,
+        lane,
+        timer: gameState.timer    // <-- send server timer
+      });
     });
   } else {
     const direction = Math.random() > 0.5 ? 'left' : 'right';
-    const id = gameState.nextObstacleId++;
+    // create one blue set per active track
     activeTracks.forEach(track => {
-      broadcastToLobby(lobbyId, { type: 'spawnObstacle', kind: 'blue', id, track, direction });
+      const id = gameState.nextObstacleId++;
+      const blueSet = {
+        id,
+        kind: 'blue',
+        track,
+        direction,
+        x: CONFIG.gameWidth,
+        width: CONFIG.obstacleWidth,
+        processedPlayers: new Set()
+      };
+      gameState.blueSets.push(blueSet);
+      broadcastToLobby(lobbyId, {
+        type: 'spawnObstacle',
+        kind: 'blue',
+        id,
+        track,
+        direction,
+        timer: gameState.timer
+      });
     });
     gameState.lastBlueSpawn = now;
   }
@@ -180,43 +275,40 @@ function checkWinnerLobby(lobbyId) {
   const alive = all.filter(p => !p.falling);
   const fallen = all.filter(p => p.falling);
 
+  // Record survival times for any newly fallen players
   fallen.forEach(p => {
     if (!gameState.survivalTimes[p.id]) {
       gameState.survivalTimes[p.id] = gameState.timer;
     }
   });
 
-  if (fallen.length === 0) return;
+  // Only end the game when no one is alive
+  if (alive.length === 0) {
+    // All players are dead – determine the winner based on longest survival time
+    let winnerName = "No one";
+    let longestTime = -1;
 
-  let gameEnded = false;
-  let winnerName = null;
-
-  if (all.length === 1 && alive.length === 0) {
-    gameEnded = true;
-    winnerName = "No one";
-  } else if (all.length > 1 && alive.length === 1) {
-    gameEnded = true;
-    winnerName = alive[0].name;
-  } else if (all.length > 1 && alive.length === 0) {
-    gameEnded = true;
-    winnerName = "No one";
-  }
-
-  if (gameEnded) {
-    alive.forEach(p => {
-      if (!gameState.survivalTimes[p.id]) {
-        gameState.survivalTimes[p.id] = gameState.timer;
+    Object.values(gameState.players).forEach(p => {
+      const time = gameState.survivalTimes[p.id] || 0;
+      if (time > longestTime) {
+        longestTime = time;
+        winnerName = p.name;
+      } else if (time === longestTime && time !== -1) {
+        // tie – keep "No one" or could be multiple winners, but we'll keep "No one"
+        winnerName = "No one";
       }
     });
 
     gameState.winner = winnerName;
+    // Reset ready status for all players so they must ready up again
+    Object.values(lobby.players).forEach(p => { p.ready = false; });
     gameState.running = false;
 
     const playerTimes = Object.values(gameState.players).map(p => ({
       name: p.name,
       time: gameState.survivalTimes[p.id] || 0
     }));
-
+//
     broadcastToLobby(lobbyId, {
       type: "gameOver",
       winner: winnerName,
@@ -433,10 +525,9 @@ function handleMessageFor(lobbyId, id, raw) {
     }
   }
 
-  if (msg.type === 'hit') {
-    const p = gameState.players[id];
-    if (p) loseHP(p, gameState);
-  }
+  // ---------- removed client‑side hit handler ----------
+  // if (msg.type === 'hit') { ... }   // DELETED
+  // -----------------------------------------------------
 
   if (msg.type === 'input') {
     const p = gameState.players[id];

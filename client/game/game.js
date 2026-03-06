@@ -23,9 +23,13 @@ const CONFIG = {
 
   spawnIntervalMin: 250,
   spawnIntervalMax: 900,
-  minBlueGap: 900
-};
+  minBlueGap: 900,
 
+  // ---------- added for timer‑based spawn placement ----------
+  gameWidth: 2000    // must match server's gameWidth
+  // -----------------------------------------------------------
+};
+CONFIG.trackHeight = CONFIG.lanesPerTrack * CONFIG.laneHeight + CONFIG.trackSpacing;
 const PLAYER_COLORS = ["cyan", "orange", "lime", "magenta"];
 
 // ===============================
@@ -63,6 +67,7 @@ function sendInput(action) {
 // ===============================
 function handleServerMessage(msg) {
   if (msg.type === "welcome") {
+    sessionStorage.setItem('playerId', myId);
     myId = msg.id;
   }
 
@@ -97,11 +102,13 @@ function handleServerMessage(msg) {
   }
 
   if (msg.type === "spawnObstacle") {
+    // ---------- modified: pass server timer ----------
     if (msg.kind === "red") {
-      spawnRedObstacle(msg.track, msg.lane, msg.id);
+      spawnRedObstacle(msg.track, msg.lane, msg.id, msg.timer);
     } else if (msg.kind === "blue") {
-      spawnBlueObstacleSet(msg.track, msg.direction, msg.id);
+      spawnBlueObstacleSet(msg.track, msg.direction, msg.id, msg.timer);
     }
+    // ------------------------------------------------
   }
 
   if (msg.type === "playerQuit") {
@@ -114,15 +121,16 @@ function handleServerMessage(msg) {
 // ===============================
 function scaleGameArea() {
   const trackCount = Object.keys(players).length;
-  const totalHeight = trackCount * (CONFIG.lanesPerTrack * CONFIG.laneHeight + CONFIG.trackSpacing) - CONFIG.trackSpacing;
+  const totalHeight = trackCount * CONFIG.trackHeight - CONFIG.trackSpacing;
   const scaleY = Math.min(1, window.innerHeight / totalHeight);
   const scaleX = scaleY;
   const el = document.getElementById("gameArea");
   el.style.transformOrigin = "top left";
   el.style.transform = `scale(${scaleX}, ${scaleY})`;
   const unscaledWidth = window.innerWidth / scaleX;
+  // we keep CONFIG.gameWidth fixed (2000) for obstacle placement, but scale the container
   el.style.width = unscaledWidth + "px";
-  CONFIG.gameWidth = unscaledWidth;
+  // do NOT overwrite CONFIG.gameWidth
 }
 
 // ===============================
@@ -133,7 +141,7 @@ function initGame() {
     if (myId !== null && serverPlayers[myId]) {
       clearInterval(waitForPlayers);
       setupPlayers();
-      createTrackLines();
+      createTrackLines();   // <-- now includes top double lines
       scaleGameArea();
       state.running = true;
       startRenderLoop();
@@ -207,13 +215,31 @@ function createPlayer(id, track) {
 }
 
 // ===============================
-// TRACK LINES
+// TRACK LINES (with double top lines)
 // ===============================
 function createTrackLines() {
   const container = document.getElementById("trackLines");
   const trackCount = Object.keys(serverPlayers).length;
+
   for (let t = 0; t < trackCount; t++) {
-    const trackTop = t * (CONFIG.lanesPerTrack * CONFIG.laneHeight + CONFIG.trackSpacing);
+    const trackTop = t * CONFIG.trackHeight;
+
+    // ---- Top double line for every track except the very first ----
+    if (t > 0) {
+      const top1 = document.createElement("div");
+      top1.classList.add("track-top");
+      top1.style.top = trackTop + "px";
+      top1.style.background = PLAYER_COLORS[t];
+      container.appendChild(top1);
+
+      const top2 = document.createElement("div");
+      top2.classList.add("track-top");
+      top2.style.top = trackTop + 6 + "px";
+      top2.style.background = PLAYER_COLORS[t];
+      container.appendChild(top2);
+    }
+
+    // ---- Lane lines ----
     for (let i = 1; i < CONFIG.lanesPerTrack; i++) {
       const line = document.createElement("div");
       line.classList.add("track-line");
@@ -221,11 +247,20 @@ function createTrackLines() {
       line.style.background = PLAYER_COLORS[t];
       container.appendChild(line);
     }
-    const bottom = document.createElement("div");
-    bottom.classList.add("track-bottom");
-    bottom.style.top = trackTop + CONFIG.lanesPerTrack * CONFIG.laneHeight + "px";
-    bottom.style.background = PLAYER_COLORS[t];
-    container.appendChild(bottom);
+
+    // ---- Bottom double line (unchanged) ----
+    const bottom1 = document.createElement("div");
+    bottom1.classList.add("track-bottom");
+    bottom1.style.top = trackTop + CONFIG.lanesPerTrack * CONFIG.laneHeight + "px";
+    bottom1.style.background = PLAYER_COLORS[t];
+    container.appendChild(bottom1);
+
+    const bottom2 = document.createElement("div");
+    bottom2.classList.add("track-bottom");
+    bottom2.style.top =
+      trackTop + CONFIG.lanesPerTrack * CONFIG.laneHeight + 6 + "px";
+    bottom2.style.background = PLAYER_COLORS[t];
+    container.appendChild(bottom2);
   }
 }
 
@@ -282,7 +317,6 @@ function updatePlayer(p, delta) {
   p.renderY = lerp(p.renderY ?? targetY, targetY, Math.min(1, delta * 155));
   p.hpY = lerp(p.hpY ?? targetY, targetY, Math.min(1, delta * 15));
 
-  // Update indicator renderY here where delta is available
   const ind = p.indicatorEl;
   if (ind) {
     ind.renderY = lerp(ind.renderY ?? p.renderY, p.renderY, 1 - Math.pow(0.001, delta));
@@ -292,26 +326,31 @@ function updatePlayer(p, delta) {
 // ===============================
 // SPAWNING (called by server events)
 // ===============================
-function spawnRedObstacle(track, lane, serverId) {
+function spawnRedObstacle(track, lane, serverId, spawnTimer) {   // <-- added spawnTimer
   const el = document.createElement("div");
   el.classList.add("obstacle", "red");
   el.style.width = CONFIG.obstacleWidth + "px";
   el.style.height = CONFIG.laneHeight + "px";
   gameEl.appendChild(el);
 
+  // ---------- timer‑based initial X ----------
+  const age = Math.max(0, state.timer - spawnTimer);
+  const startX = CONFIG.gameWidth - state.speed * age;
+  // -------------------------------------------
+
   obstacles.push({
     kind: "red",
     serverId,
     track,
     lane,
-    x: CONFIG.gameWidth || window.innerWidth,
+    x: startX,
     width: CONFIG.obstacleWidth,
     el,
-    hit: false
+    // removed hit flag (no client collision)
   });
 }
 
-function spawnBlueObstacleSet(track, direction, serverId) {
+function spawnBlueObstacleSet(track, direction, serverId, spawnTimer) {   // <-- added spawnTimer
   const group = [];
 
   for (let lane = 0; lane < CONFIG.lanesPerTrack; lane++) {
@@ -324,15 +363,18 @@ function spawnBlueObstacleSet(track, direction, serverId) {
     group.push({ lane, el });
   }
 
+  const age = Math.max(0, state.timer - spawnTimer);
+  const startX = CONFIG.gameWidth - state.speed * age;
+
   obstacles.push({
     kind: "blue",
     serverId,
     track,
-    x: CONFIG.gameWidth || window.innerWidth,
+    x: startX,
     group,
     width: CONFIG.obstacleWidth,
     direction,
-    resolved: false
+    resolved: false   // used only for visual feedback
   });
 }
 
@@ -340,7 +382,7 @@ function spawnBlueObstacleSet(track, direction, serverId) {
 // UPDATE OBSTACLES
 // ===============================
 function getTrackTop(trackIndex) {
-  return trackIndex * (CONFIG.lanesPerTrack * CONFIG.laneHeight + CONFIG.trackSpacing);
+  return trackIndex * CONFIG.trackHeight;
 }
 
 function updateObstacles(delta) {
@@ -353,28 +395,9 @@ function updateObstacles(delta) {
       ob.el.style.top = getTrackTop(ob.track) + ob.lane * CONFIG.laneHeight + "px";
       ob.el.style.left = ob.x + "px";
 
-      const myPlayer = players[myId];
-      if (myPlayer && myPlayer.track === ob.track && myPlayer.lane === ob.lane && !ob.hit && !myPlayer.falling) {
-        let leniency = 0;
-        if (state.timer > 10) {
-          if (!ob.leniencyApplied) {
-            ob.leniency = ob.width * 0.2;
-            ob.leniencyApplied = true;
-          }
-          leniency = ob.leniency || 0;
-        }
-
-        const overlap =
-          myPlayer.x + myPlayer.width > ob.x + leniency &&
-          myPlayer.x < ob.x + ob.width - leniency;
-
-        if (overlap) {
-          ob.hit = true;
-          if (ws && ws.readyState === 1) {
-            ws.send(JSON.stringify({ type: "hit", kind: "red" }));
-          }
-        }
-      }
+      // ---------- removed client‑side hit detection ----------
+      // (no collision check, no "hit" message)
+      // -------------------------------------------------------
 
       if (ob.x < -ob.width) {
         ob.el.remove();
@@ -389,21 +412,21 @@ function updateObstacles(delta) {
         g.el.style.left = ob.x + "px";
       });
 
+      // ---------- visual feedback only (no damage) ----------
       const myPlayer = players[myId];
       if (myPlayer && myPlayer.track === ob.track && !ob.resolved) {
         const dist = ob.x - myPlayer.x;
         if (dist < CONFIG.blueHitWindow && dist > -CONFIG.blueForgiveness) {
-          ob.resolved = true;
+          ob.resolved = true;   // mark to avoid repeated checks
           if (myPlayer.dodge === ob.direction) {
             ob.group.forEach(g => g.el.style.background = "limegreen");
           } else {
             ob.group.forEach(g => g.el.style.background = "red");
-            if (ws && ws.readyState === 1) {
-              ws.send(JSON.stringify({ type: "hit", kind: "blue" }));
-            }
+            // no hit message sent – damage handled by server
           }
         }
       }
+      // -------------------------------------------------------
 
       if (ob.x < -ob.width) {
         ob.group.forEach(g => g.el.remove());
@@ -468,7 +491,6 @@ function render() {
     document.getElementById("ui").appendChild(scoreboard);
   }
 
-  // Build/update scoreboard rows without rebuilding innerHTML every frame
   Object.values(serverPlayers).forEach(sp => {
     let row = document.getElementById("sb-" + sp.id);
     if (!row) {
@@ -546,7 +568,6 @@ function showGameOver(winner, playerTimes = []) {
     table.style.borderRadius = "8px";
     table.style.padding = "10px";
 
-    // Header
     const header = document.createElement("div");
     header.style.display = "flex";
     header.style.justifyContent = "space-between";
@@ -556,7 +577,6 @@ function showGameOver(winner, playerTimes = []) {
     header.innerHTML = "<span>Player</span><span>Time</span>";
     table.appendChild(header);
 
-    // Sort by time descending (longest survival first)
     const sorted = [...playerTimes].sort((a, b) => b.time - a.time);
 
     sorted.forEach(p => {
@@ -586,6 +606,7 @@ function showGameOver(winner, playerTimes = []) {
   btn.onclick = () => {
     const params = new URLSearchParams(window.location.search);
     const lobbyId = params.get('lobby');
+    const pid = sessionStorage.getItem('playerId');   // <-- ADD THIS
     if (lobbyId) {
       window.location.href = `/lobby?lobby=${encodeURIComponent(lobbyId)}`;
     } else {
@@ -604,6 +625,12 @@ function showNotification(text) {
   document.body.appendChild(notif);
   setTimeout(() => notif.remove(), 3000);
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    lastTime = performance.now(); // reset delta
+  }
+});
 
 // ===============================
 // INPUT

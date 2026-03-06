@@ -134,6 +134,13 @@ body {
   opacity: 0.8;
 }
 
+.track-top {
+  position: absolute;
+  height: 4px;
+  width: 100%;
+  opacity: 0.8;
+}
+
 /* PAUSE OVERLAY */
 #pauseOverlay {
   display: none;

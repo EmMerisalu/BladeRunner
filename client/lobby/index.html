@@ -35,6 +35,21 @@ Lobby ID: <span id="lobbyId">-</span>
 <script>
 (function(){
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  
+  // Read both lobbyId and pid from URL
+  const params = new URLSearchParams(location.search);
+  const lobbyId = params.get('lobby');
+  const pidFromUrl = params.get('pid');
+
+  // If we have a stored playerId from a previous session, and the URL lacks a pid,
+  // redirect to include it (so we don't create a duplicate player after refresh).
+  const storedPid = sessionStorage.getItem('playerId');
+  if (!pidFromUrl && storedPid && lobbyId) {
+    window.location.href = `/lobby?lobby=${encodeURIComponent(lobbyId)}&pid=${storedPid}`;
+    return; // stop further execution
+  }
+
+  // Build WebSocket URL with full query string (includes both lobby and pid if present)
   const ws = new WebSocket(`${protocol}//${location.host}${location.search}`);
 
   const playersEl = document.getElementById('players');
@@ -50,8 +65,6 @@ Lobby ID: <span id="lobbyId">-</span>
   let myName = null;
   let nameUpdateTimeout = null;
 
-  const params = new URLSearchParams(location.search);
-  const lobbyId = params.get('lobby');
   lobbyIdEl.textContent = lobbyId || "-";
 
   copyBtn.onclick = () => {

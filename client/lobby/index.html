@@ -149,14 +149,27 @@ if(msg.type === "lobby"){
   renderPlayers(msg.players,msg.hostId);
 
   if(myId === msg.hostId){
-
+    // show start button when this client becomes host
+    startBtn.style.display = "inline";
     const allReady =
       msg.players.length >= 1 &&
       msg.players.every(p => p.ready && p.name);
 
     startBtn.disabled = !allReady;
+  } else {
+    // hide if not host
+    startBtn.style.display = "none";
   }
 
+}
+
+if(msg.type === "hostChanged"){
+  // explicit leader update; adjust visibility
+  if(myId === msg.hostId){
+    startBtn.style.display = "inline";
+  } else {
+    startBtn.style.display = "none";
+  }
 }
 
 if(msg.type === "nameTaken"){

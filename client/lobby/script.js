@@ -55,12 +55,26 @@ currentPlayers = msg.players;
 renderPlayers(msg.players,msg.hostId);
 
 if(myId === msg.hostId){
+// Show start button if current player is now the host
+startBtn.style.display = "inline";
+
 const allReady =
 msg.players.length >= 1 &&
 msg.players.every(p => p.ready && p.name);
 
 startBtn.disabled = !allReady;
+} else {
+// Hide start button if current player is not the host
+startBtn.style.display = "none";
 }
+}
+
+if(msg.type === "hostChanged"){
+  if(myId === msg.hostId){
+    startBtn.style.display = "inline";
+  } else {
+    startBtn.style.display = "none";
+  }
 }
 
 if(msg.type === "nameTaken"){

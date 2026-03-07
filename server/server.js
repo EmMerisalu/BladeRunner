@@ -359,6 +359,12 @@ function broadcastLobbyFor(lobbyId) {
   broadcastToLobby(lobbyId, { type: "lobby", players: snapshot, hostId: lobby.hostId });
 }
 
+function broadcastHostChange(lobbyId) {
+  const lobby = lobbies[lobbyId];
+  if (!lobby) return;
+  broadcastToLobby(lobbyId, { type: 'hostChanged', hostId: lobby.hostId });
+}
+
 function broadcastToLobby(lobbyId, obj) {
   const lobby = lobbies[lobbyId];
   if (!lobby) return;
@@ -447,10 +453,15 @@ wss.on('connection', (ws, req) => {
   const isHost = lobby.hostId === null;
 
   lobby.players[id] = { id, name: null, ready: false, track, ws };
-  if (isHost) lobby.hostId = id;
+  if (isHost) {
+    lobby.hostId = id;
+  }
 
   ws.send(JSON.stringify({ type: 'welcome', id, track, isHost }));
   broadcastLobbyFor(lobbyId);
+  if (isHost) {
+    broadcastHostChange(lobbyId);
+  }
 
   ws.on('message', (raw) => handleMessageFor(lobbyId, id, raw));
 
@@ -460,6 +471,8 @@ wss.on('connection', (ws, req) => {
     if (lobby.hostId === id) {
       const remaining = Object.keys(lobby.players);
       lobby.hostId = remaining.length > 0 ? Number(remaining[0]) : null;
+      // let clients know about the new leader separately
+      broadcastHostChange(lobbyId);
     }
 
     if (Object.keys(lobby.players).length === 0 && !lobby.started) {

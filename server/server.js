@@ -569,6 +569,7 @@ function handleMessageFor(lobbyId, id, raw) {
 app.use('/', express.static(path.join(__dirname, '../client/menu')));
 app.use('/game',  express.static(path.join(__dirname, '../client/game')));
 app.use('/lobby', express.static(path.join(__dirname, '../client/lobby')));
+app.use('/sounds', express.static(path.join(__dirname, '../client/sounds')));
 
 const PORT = 3000;
 server.listen(PORT, () => {

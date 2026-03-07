@@ -121,8 +121,8 @@ function sendInput(action) {
 // ===============================
 function handleServerMessage(msg) {
   if (msg.type === "welcome") {
-    sessionStorage.setItem('playerId', myId);
     myId = msg.id;
+    sessionStorage.setItem('playerId', myId);
   }
 
   if (msg.type === "gameState") {
@@ -147,6 +147,8 @@ function handleServerMessage(msg) {
         }
       }
     });
+
+    syncObstaclesFromServer(msg.obstacles || [], msg.blueSets || []);
   }
 
   if (msg.type === "pauseState") {
@@ -158,15 +160,7 @@ function handleServerMessage(msg) {
     showGameOver(msg.winner || "No one", msg.playerTimes || []);
   }
 
-  if (msg.type === "spawnObstacle") {
-    // ---------- modified: pass server timer ----------
-    if (msg.kind === "red") {
-      spawnRedObstacle(msg.track, msg.lane, msg.id, msg.timer);
-    } else if (msg.kind === "blue") {
-      spawnBlueObstacleSet(msg.track, msg.direction, msg.id, msg.timer);
-    }
-    // ------------------------------------------------
-  }
+  // Obstacle visuals are synced from gameState snapshots only.
 
   if (msg.type === "playerQuit") {
     showNotification(`${msg.name} has quit`);
@@ -194,6 +188,9 @@ function scaleGameArea() {
 // INIT GAME
 // ===============================
 function initGame() {
+  // Ensure any previous music is stopped before starting new game
+  stopBgMusic();
+  
   const waitForPlayers = setInterval(() => {
     if (myId !== null && serverPlayers[myId]) {
       clearInterval(waitForPlayers);
@@ -436,6 +433,60 @@ function spawnBlueObstacleSet(track, direction, serverId, spawnTimer) {   // <--
   });
 }
 
+function findObstacle(kind, serverId) {
+  return obstacles.find(ob => ob.kind === kind && ob.serverId === serverId);
+}
+
+function syncObstaclesFromServer(serverRed, serverBlue) {
+  const seen = new Set();
+
+  serverRed.forEach(ob => {
+    const key = `red:${ob.id}`;
+    seen.add(key);
+
+    let local = findObstacle("red", ob.id);
+    if (!local) {
+      spawnRedObstacle(ob.track, ob.lane, ob.id, state.timer);
+      local = findObstacle("red", ob.id);
+    }
+
+    if (!local) return;
+    local.track = ob.track;
+    local.lane = ob.lane;
+    local.x = ob.x;
+    local.width = ob.width || CONFIG.obstacleWidth;
+  });
+
+  serverBlue.forEach(ob => {
+    const key = `blue:${ob.id}`;
+    seen.add(key);
+
+    let local = findObstacle("blue", ob.id);
+    if (!local) {
+      spawnBlueObstacleSet(ob.track, ob.direction, ob.id, state.timer);
+      local = findObstacle("blue", ob.id);
+    }
+
+    if (!local) return;
+    local.track = ob.track;
+    local.direction = ob.direction;
+    local.x = ob.x;
+    local.width = ob.width || CONFIG.obstacleWidth;
+  });
+
+  obstacles = obstacles.filter(ob => {
+    const key = `${ob.kind}:${ob.serverId}`;
+    if (seen.has(key)) return true;
+
+    if (ob.kind === "red") {
+      ob.el.remove();
+    } else if (ob.kind === "blue") {
+      ob.group.forEach(g => g.el.remove());
+    }
+    return false;
+  });
+}
+
 // ===============================
 // UPDATE OBSTACLES
 // ===============================
@@ -444,10 +495,7 @@ function getTrackTop(trackIndex) {
 }
 
 function updateObstacles(delta) {
-  const move = state.speed * delta;
-
   obstacles = obstacles.filter(ob => {
-    ob.x -= move;
 
     if (ob.kind === "red") {
       ob.el.style.top = getTrackTop(ob.track) + ob.lane * CONFIG.laneHeight + "px";
@@ -457,10 +505,6 @@ function updateObstacles(delta) {
       // (no collision check, no "hit" message)
       // -------------------------------------------------------
 
-      if (ob.x < -ob.width) {
-        ob.el.remove();
-        return false;
-      }
       return true;
     }
 
@@ -486,10 +530,6 @@ function updateObstacles(delta) {
       }
       // -------------------------------------------------------
 
-      if (ob.x < -ob.width) {
-        ob.group.forEach(g => g.el.remove());
-        return false;
-      }
       return true;
     }
 

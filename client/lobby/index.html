@@ -33,6 +33,14 @@ Lobby ID: <span id="lobbyId">-</span>
 
 <div id="players" class="players"></div>
 
+<div class="name-row">
+  <label for="modeSelect">Mode</label>
+  <select id="modeSelect" disabled>
+    <option value="easy">Easy</option>
+    <option value="hard">Hard</option>
+  </select>
+</div>
+
 <div class="controls">
   <button id="readyBtn" disabled>Ready</button>
   <button id="startBtn" style="display:none">Start Game</button>
@@ -70,6 +78,7 @@ const copyBtn = document.getElementById('copyId');
 const status = document.getElementById('status');
 const nameInput = document.getElementById('nameInput');
 const nameError = document.getElementById('nameError');
+const modeSelect = document.getElementById('modeSelect');
 
 let myId = null;
 let myName = null;
@@ -149,10 +158,12 @@ if(msg.type === "welcome"){
 if(msg.type === "lobby"){
 
   renderPlayers(msg.players,msg.hostId);
+  if (msg.mode) modeSelect.value = msg.mode;
 
   if(myId === msg.hostId){
     // show start button when this client becomes host
     startBtn.style.display = "inline";
+    modeSelect.disabled = false;
     const allReady =
       msg.players.length >= 1 &&
       msg.players.every(p => p.ready && p.name);
@@ -161,6 +172,7 @@ if(msg.type === "lobby"){
   } else {
     // hide if not host
     startBtn.style.display = "none";
+    modeSelect.disabled = true;
   }
 
 }
@@ -169,8 +181,10 @@ if(msg.type === "hostChanged"){
   // explicit leader update; adjust visibility
   if(myId === msg.hostId){
     startBtn.style.display = "inline";
+    modeSelect.disabled = false;
   } else {
     startBtn.style.display = "none";
+    modeSelect.disabled = true;
   }
 }
 
@@ -226,6 +240,10 @@ ws.send(JSON.stringify({type:"ready"}));
 
 startBtn.onclick = ()=>{
 ws.send(JSON.stringify({type:"startGame"}));
+};
+
+modeSelect.onchange = ()=>{
+  ws.send(JSON.stringify({ type: "setGameMode", mode: modeSelect.value }));
 };
 
 })();

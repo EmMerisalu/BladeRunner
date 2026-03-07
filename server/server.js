@@ -27,6 +27,19 @@ const CONFIG = {
   obstacleWidth: 40
   // -----------------------------------------------------
 };
+
+const MODE_CONFIG = {
+  easy: {
+    spawnIntervalMin: 900,
+    spawnIntervalMax: 1500,
+    minBlueGap: 1400
+  },
+  hard: {
+    spawnIntervalMin: 250,
+    spawnIntervalMax: 900,
+    minBlueGap: 900
+  }
+};
 CONFIG.tickRate = 1000 / 60;
 
 function freshGameState() {
@@ -58,6 +71,7 @@ function createLobby() {
   lobbies[id] = {
     players: {},
     started: false,
+    mode: 'easy',
     hostId: null,
     gameState: freshGameState(),
     nextPlayerId: 1,
@@ -93,11 +107,16 @@ function startGameLoopFor(lobbyId) {
   }, CONFIG.tickRate);
 }
 
-function getRandomSpawnInterval(speed) {
+function getModeSettings(mode) {
+  return MODE_CONFIG[mode] || MODE_CONFIG.easy;
+}
+
+function getRandomSpawnInterval(speed, mode) {
+  const settings = getModeSettings(mode);
   const chaos = Math.random() ** 2;
   const speedFactor = Math.max(0.5, 1 - speed / 3000);
-  return (CONFIG.spawnIntervalMin +
-    chaos * (CONFIG.spawnIntervalMax - CONFIG.spawnIntervalMin)) * speedFactor;
+  return (settings.spawnIntervalMin +
+    chaos * (settings.spawnIntervalMax - settings.spawnIntervalMin)) * speedFactor;
 }
 
 function tickLobby(lobbyId, delta) {
@@ -166,7 +185,7 @@ function tickLobby(lobbyId, delta) {
   if (gameState.lastSpawn >= gameState.nextSpawnInterval) {
     spawnObstaclesFor(lobbyId);
     gameState.lastSpawn = 0;
-    gameState.nextSpawnInterval = getRandomSpawnInterval(gameState.speed);
+    gameState.nextSpawnInterval = getRandomSpawnInterval(gameState.speed, lobby.mode);
   }
   // -------------------------------------------------------------------------
 
@@ -178,21 +197,22 @@ function spawnObstaclesFor(lobbyId) {
   const lobby = lobbies[lobbyId];
   if (!lobby) return;
   const gameState = lobby.gameState;
+  const modeSettings = getModeSettings(lobby.mode);
 
   const now = gameState.timer * 1000;
-  const allowBlue = now - gameState.lastBlueSpawn > CONFIG.minBlueGap;
+  const allowBlue = now - gameState.lastBlueSpawn > modeSettings.minBlueGap;
   const activeTracks = Object.values(gameState.players).map(p => p.track);
 
   if (Math.random() < 0.6 || !allowBlue) {
+    const sharedLane = Math.floor(Math.random() * CONFIG.lanesPerTrack);
     // spawn red obstacles for each active track
     activeTracks.forEach(track => {
-      const lane = Math.floor(Math.random() * CONFIG.lanesPerTrack);
       const id = gameState.nextObstacleId++;
       const obstacle = {
         id,
         kind: 'red',
         track,
-        lane,
+        lane: sharedLane,
         x: CONFIG.gameWidth,
         width: CONFIG.obstacleWidth
       };
@@ -202,7 +222,7 @@ function spawnObstaclesFor(lobbyId) {
         kind: 'red',
         id,
         track,
-        lane,
+        lane: sharedLane,
         timer: gameState.timer    // <-- send server timer
       });
     });
@@ -334,6 +354,22 @@ function broadcastGameStateFor(lobbyId) {
     speed: gameState.speed,
     paused: gameState.paused,
     pausedBy: gameState.pausedBy,
+    obstacles: gameState.obstacles.map(ob => ({
+      id: ob.id,
+      kind: ob.kind,
+      track: ob.track,
+      lane: ob.lane,
+      x: ob.x,
+      width: ob.width
+    })),
+    blueSets: gameState.blueSets.map(bs => ({
+      id: bs.id,
+      kind: bs.kind,
+      track: bs.track,
+      direction: bs.direction,
+      x: bs.x,
+      width: bs.width
+    })),
     players: Object.values(gameState.players).map(p => ({
       id: p.id,
       name: p.name,
@@ -356,7 +392,12 @@ function broadcastLobbyFor(lobbyId) {
     ready: p.ready,
     track: p.track
   }));
-  broadcastToLobby(lobbyId, { type: "lobby", players: snapshot, hostId: lobby.hostId });
+  broadcastToLobby(lobbyId, {
+    type: "lobby",
+    players: snapshot,
+    hostId: lobby.hostId,
+    mode: lobby.mode
+  });
 }
 
 function broadcastHostChange(lobbyId) {
@@ -511,6 +552,14 @@ function handleMessageFor(lobbyId, id, raw) {
     broadcastLobbyFor(lobbyId);
   }
 
+  if (msg.type === 'setGameMode') {
+    if (id !== lobby.hostId) return;
+    const requestedMode = String(msg.mode || '').toLowerCase();
+    if (requestedMode !== 'easy' && requestedMode !== 'hard') return;
+    lobby.mode = requestedMode;
+    broadcastLobbyFor(lobbyId);
+  }
+
   if (msg.type === 'startGame') {
     const players = Object.values(lobby.players);
     const canStart =
@@ -526,7 +575,7 @@ function handleMessageFor(lobbyId, id, raw) {
       lobby.pendingStart = true;
       lobby.started = true;
       initGamePlayersFor(lobbyId);
-      lobby.gameState.nextSpawnInterval = getRandomSpawnInterval(lobby.gameState.speed);
+      lobby.gameState.nextSpawnInterval = getRandomSpawnInterval(lobby.gameState.speed, lobby.mode);
       startGameLoopFor(lobbyId);
       broadcastToLobby(lobbyId, { type: 'start' });
 

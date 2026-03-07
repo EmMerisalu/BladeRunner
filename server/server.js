@@ -584,7 +584,7 @@ app.use('/game',  express.static(path.join(__dirname, '../client/game')));
 app.use('/lobby', express.static(path.join(__dirname, '../client/lobby')));
 app.use('/sounds', express.static(path.join(__dirname, '../client/sounds')));
 
-const PORT = 3000;
+const PORT = 80;
 server.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });

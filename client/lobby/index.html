@@ -84,7 +84,9 @@ copyBtn.onclick = () => {
 
 function sendName(name){
   if(!name.trim()) return;
-  ws.send(JSON.stringify({type:"setName",name:name.trim()}));
+  const trimmed = name.trim();
+  ws.send(JSON.stringify({type:"setName",name:trimmed}));
+  sessionStorage.setItem('playerName', trimmed);
 }
 
 nameInput.addEventListener("input",()=>{
@@ -191,7 +193,11 @@ const me = players.find(p => p.id === myId);
 if(me){
   readyBtn.disabled = !me.name;
   myName = me.name;
-  if(me.name) nameError.textContent = "";
+  if(me.name) {
+    nameError.textContent = "";
+    // Ensure name is saved to sessionStorage
+    sessionStorage.setItem('playerName', me.name);
+  }
 }else{
   readyBtn.disabled = true;
 }

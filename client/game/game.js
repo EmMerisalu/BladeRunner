@@ -1,6 +1,4 @@
-// ===============================
 // CONFIG
-// ===============================
 const CONFIG = {
   gravity: 2200,
   jumpForce: 850,
@@ -25,16 +23,13 @@ const CONFIG = {
   spawnIntervalMax: 900,
   minBlueGap: 900,
 
-  // ---------- added for timer‑based spawn placement ----------
+  //added for timer‑based spawn placement 
   gameWidth: 2000    // must match server's gameWidth
-  // -----------------------------------------------------------
 };
 CONFIG.trackHeight = CONFIG.lanesPerTrack * CONFIG.laneHeight + CONFIG.trackSpacing;
 const PLAYER_COLORS = ["cyan", "orange", "lime", "magenta"];
 
-// ===============================
 // SOUND
-// ===============================
 function playMoveSound() {
   const sound = new Audio('/sounds/move.wav');
   sound.volume = isMuted ? 0 : 1;
@@ -137,16 +132,12 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-// ===============================
 // MULTIPLAYER STATE
-// ===============================
-let ws = null;
-let myId = null;
+let ws = window.__bladeRunnerSocket || null;
+let myId = Number(window.__bladeRunnerMyId || sessionStorage.getItem('playerId')) || null;
 let serverPlayers = {};
 
-// ===============================
 // LOCAL GAME STATE
-// ===============================
 let state = {
   running: false,
   speed: CONFIG.baseSpeed,
@@ -158,9 +149,7 @@ let obstacles = [];
 const players = {};
 const gameEl = document.getElementById("gameArea");
 
-// ===============================
 // WEBSOCKET
-// ===============================
 function sendInput(action) {
   if (ws && ws.readyState === 1) {
     ws.send(JSON.stringify({ type: "input", action }));

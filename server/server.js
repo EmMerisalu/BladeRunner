@@ -20,19 +20,18 @@ const CONFIG = {
   spawnIntervalMin: 250,
   spawnIntervalMax: 900,
   minBlueGap: 900,
-  // ---------- added for server‑side collision ----------
+  //  added for server‑side collision
   gameWidth: 2000,               // logical width, must match client
   blueHitWindow: 110,
   blueForgiveness: 40,
   obstacleWidth: 40
-  // -----------------------------------------------------
 };
 
 const MODE_CONFIG = {
-  easy: {
-    spawnIntervalMin: 900,
-    spawnIntervalMax: 1500,
-    minBlueGap: 1400
+   easy: {
+    spawnIntervalMin: 500,
+    spawnIntervalMax: 1200,
+    minBlueGap: 1000
   },
   hard: {
     spawnIntervalMin: 250,
@@ -47,7 +46,7 @@ const OBSTACLE_BATCH_SIZE = {
 };
 
 const OBSTACLE_BROADCAST_LOOKAHEAD = 1200;
-const GAMESTATE_BROADCAST_INTERVAL_MS = 33; // ~30 Hz snapshots
+const GAMESTATE_BROADCAST_INTERVAL_MS = 33; 
 CONFIG.tickRate = 1000 / 60;
 
 function freshGameState() {
@@ -65,10 +64,9 @@ function freshGameState() {
     nextSpawnInterval: 0,
     lastBlueSpawn: -9999,
     nextObstacleId: 1,
-    // ---------- added for server‑side obstacle tracking ----------
+    //  added for server‑side obstacle tracking
     obstacles: [],      // red obstacles
     blueSets: []        // blue obstacle sets
-    // -------------------------------------------------------------
   };
 }
 
@@ -140,7 +138,7 @@ function tickLobby(lobbyId, delta) {
     gameState.lastSpeedIncrease = 0;
   }
 
-  // ---------- obstacle movement ----------
+  // obstacle movement
   const speed = gameState.speed;
   gameState.obstacles.forEach(ob => ob.x -= speed * delta);
   gameState.blueSets.forEach(bs => bs.x -= speed * delta);
@@ -148,9 +146,9 @@ function tickLobby(lobbyId, delta) {
   // remove off‑screen obstacles
   gameState.obstacles = gameState.obstacles.filter(ob => ob.x > -ob.width);
   gameState.blueSets = gameState.blueSets.filter(bs => bs.x > -bs.width);
-  // ---------------------------------------
+  // 
 
-  // ---------- red obstacle collision ----------
+  //red obstacle collision
   for (const ob of gameState.obstacles) {
     for (const p of Object.values(gameState.players)) {
       if (p.falling) continue;
@@ -169,7 +167,6 @@ function tickLobby(lobbyId, delta) {
     }
   }
   gameState.obstacles = gameState.obstacles.filter(ob => !ob.hit);
-  // --------------------------------------------
 
   // ---------- blue set collision ----------
   for (const bs of gameState.blueSets) {
@@ -187,7 +184,6 @@ function tickLobby(lobbyId, delta) {
       }
     }
   }
-  // ----------------------------------------
 
   // ---------- spawning in batches to reduce generation churn ----------
   gameState.lastSpawn += delta * 1000;
@@ -197,7 +193,7 @@ function tickLobby(lobbyId, delta) {
     gameState.lastSpawn = 0;
     gameState.nextSpawnInterval = nextBatchDelay;
   }
-  // -------------------------------------------------------------------------
+  // 
 
   checkWinnerLobby(lobbyId);
   const nowMs = Date.now();
@@ -437,7 +433,7 @@ wss.on('connection', (ws, req) => {
     const full = new URL(req.url, `http://${req.headers.host}`);
     lobbyId = full.searchParams.get('lobby');
     pid = full.searchParams.get('pid');
-  } catch (e) { /* ignore */ }
+  } catch (e) {}
 
   if (!lobbyId || !lobbies[lobbyId]) {
     ws.send(JSON.stringify({ type: 'rejected', reason: 'Lobby not found' }));
@@ -654,7 +650,7 @@ app.use('/game',  express.static(path.join(__dirname, '../client/game')));
 app.use('/lobby', express.static(path.join(__dirname, '../client/lobby')));
 app.use('/sounds', express.static(path.join(__dirname, '../client/sounds')));
 
-const PORT = 80;
+const PORT = 3000;
 server.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });

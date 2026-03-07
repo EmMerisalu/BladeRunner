@@ -83,6 +83,7 @@ const modeSelect = document.getElementById('modeSelect');
 let myId = null;
 let myName = null;
 let nameUpdateTimeout = null;
+let gameMounted = false;
 
 lobbyIdEl.textContent = lobbyId || "-";
 
@@ -150,6 +151,7 @@ const msg = JSON.parse(ev.data);
 
 if(msg.type === "welcome"){
   myId = msg.id;
+  sessionStorage.setItem('playerId', String(myId));
   if(msg.isHost){
     startBtn.style.display = "inline";
   }
@@ -195,10 +197,116 @@ if(msg.type === "nameTaken"){
 }
 
 if(msg.type === "start"){
-  window.location.href = "/game?lobby=" + lobbyId + "&pid=" + myId;
+  mountGameView();
 }
 
 };
+
+function mountGameView() {
+  if (gameMounted) return;
+  gameMounted = true;
+
+  if (!lobbyId || !myId) {
+    status.textContent = 'Unable to start game';
+    gameMounted = false;
+    return;
+  }
+
+  sessionStorage.setItem('playerId', String(myId));
+
+  const currentSocket = ws;
+
+  document.title = 'BladeRunner';
+
+  // Remove lobby page stylesheet so game visuals match /game page rendering.
+  document.querySelectorAll('link[rel="stylesheet"]').forEach((linkEl) => linkEl.remove());
+
+  document.body.className = '';
+  document.body.removeAttribute('style');
+
+  const gameBaseStyleId = 'game-base-style';
+  if (!document.getElementById(gameBaseStyleId)) {
+    const gameBaseStyle = document.createElement('style');
+    gameBaseStyle.id = gameBaseStyleId;
+    gameBaseStyle.textContent = 'body { margin: 0; background: #111; color: white; font-family: sans-serif; } #game { display: none; position: fixed; inset: 0; }';
+    document.head.appendChild(gameBaseStyle);
+  }
+
+  document.body.innerHTML = `
+    <div id="game" style="display:block; position:fixed; inset:0;">
+      <div id="ui">
+        <div id="timer">Loading game...</div>
+      </div>
+      <div id="gameArea">
+        <div id="trackLines"></div>
+      </div>
+    </div>
+  `;
+
+  const gameCssId = 'game-style-link';
+  if (!document.getElementById(gameCssId)) {
+    const gameCss = document.createElement('link');
+    gameCss.id = gameCssId;
+    gameCss.rel = 'stylesheet';
+    gameCss.href = '/game/style.css';
+    document.head.appendChild(gameCss);
+  }
+
+  window.__bladeRunnerSocket = currentSocket;
+  window.__bladeRunnerMyId = Number(sessionStorage.getItem('playerId')) || myId;
+
+  const script = document.createElement('script');
+  script.src = '/game/game.js';
+  script.onload = () => {
+    let initialized = false;
+
+    const beginGame = () => {
+      if (initialized) return;
+      initialized = true;
+      document.getElementById('game').style.display = 'block';
+      if (typeof initGame === 'function') {
+        initGame();
+      }
+    };
+
+    currentSocket.onclose = () => {
+      const timerEl = document.getElementById('timer');
+      if (timerEl) {
+        timerEl.textContent = 'Disconnected. Please refresh.';
+      }
+    };
+
+    currentSocket.onmessage = (event) => {
+      const gameMsg = JSON.parse(event.data);
+      if (typeof handleServerMessage === 'function') {
+        handleServerMessage(gameMsg);
+      }
+
+      if (gameMsg.type === 'rejected') {
+        const timerEl = document.getElementById('timer');
+        if (timerEl) {
+          timerEl.textContent = gameMsg.reason || 'Rejected';
+        }
+        return;
+      }
+
+      if (gameMsg.type === 'started') {
+        beginGame();
+      }
+    };
+
+    beginGame();
+  };
+
+  script.onerror = () => {
+    const timerEl = document.getElementById('timer');
+    if (timerEl) {
+      timerEl.textContent = 'Failed to load game assets.';
+    }
+  };
+
+  document.body.appendChild(script);
+}
 
 function renderPlayers(players,hostId){
 

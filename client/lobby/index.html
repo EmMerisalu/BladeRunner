@@ -14,150 +14,204 @@
   }
 </style>
 </head>
+
 <body>
+
 <div class="box">
+
 <h1>Game Lobby</h1>
+
 <div class="meta">
 Lobby ID: <span id="lobbyId">-</span>
 <button id="copyId">Copy</button>
 </div>
+
 <div class="name-row">
   <input id="nameInput" type="text" placeholder="Enter your name..." maxlength="16">
   <div id="nameError" class="error-message"></div>
 </div>
+
 <div id="players" class="players"></div>
+
 <div class="controls">
   <button id="readyBtn" disabled>Ready</button>
   <button id="startBtn" style="display:none">Start Game</button>
 </div>
+
 <div id="status" class="meta"></div>
+
 </div>
+
 <script>
+
 (function(){
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  
-  // Read both lobbyId and pid from URL
-  const params = new URLSearchParams(location.search);
-  const lobbyId = params.get('lobby');
-  const pidFromUrl = params.get('pid');
 
-  // If we have a stored playerId from a previous session, and the URL lacks a pid,
-  // redirect to include it (so we don't create a duplicate player after refresh).
-  const storedPid = sessionStorage.getItem('playerId');
-  if (!pidFromUrl && storedPid && lobbyId) {
-    window.location.href = `/lobby?lobby=${encodeURIComponent(lobbyId)}&pid=${storedPid}`;
-    return; // stop further execution
+const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+
+// Read lobbyId + pid
+const params = new URLSearchParams(location.search);
+const lobbyId = params.get('lobby');
+const pidFromUrl = params.get('pid');
+
+// Restore pid if page refreshed
+const storedPid = sessionStorage.getItem('playerId');
+if (!pidFromUrl && storedPid && lobbyId) {
+  window.location.href = `/lobby?lobby=${encodeURIComponent(lobbyId)}&pid=${storedPid}`;
+  return;
+}
+
+const ws = new WebSocket(`${protocol}//${location.host}${location.search}`);
+
+const playersEl = document.getElementById('players');
+const readyBtn = document.getElementById('readyBtn');
+const startBtn = document.getElementById('startBtn');
+const lobbyIdEl = document.getElementById('lobbyId');
+const copyBtn = document.getElementById('copyId');
+const status = document.getElementById('status');
+const nameInput = document.getElementById('nameInput');
+const nameError = document.getElementById('nameError');
+
+let myId = null;
+let myName = null;
+let nameUpdateTimeout = null;
+
+lobbyIdEl.textContent = lobbyId || "-";
+
+copyBtn.onclick = () => {
+  navigator.clipboard.writeText(lobbyId);
+  status.textContent = "Lobby ID copied";
+};
+
+function sendName(name){
+  if(!name.trim()) return;
+  ws.send(JSON.stringify({type:"setName",name:name.trim()}));
+}
+
+nameInput.addEventListener("input",()=>{
+
+  const newName = nameInput.value.trim();
+
+  if(newName === myName) return;
+
+  if(nameUpdateTimeout) clearTimeout(nameUpdateTimeout);
+
+  if(newName === ""){
+    readyBtn.disabled = true;
+    nameError.textContent = "";
+    return;
   }
 
-  // Build WebSocket URL with full query string (includes both lobby and pid if present)
-  const ws = new WebSocket(`${protocol}//${location.host}${location.search}`);
+  nameUpdateTimeout = setTimeout(()=>sendName(newName),300);
 
-  const playersEl = document.getElementById('players');
-  const readyBtn = document.getElementById('readyBtn');
-  const startBtn = document.getElementById('startBtn');
-  const lobbyIdEl = document.getElementById('lobbyId');
-  const copyBtn = document.getElementById('copyId');
-  const status = document.getElementById('status');
-  const nameInput = document.getElementById('nameInput');
-  const nameError = document.getElementById('nameError');
+});
 
-  let myId = null;
-  let myName = null;
-  let nameUpdateTimeout = null;
+nameInput.addEventListener("blur",()=>{
 
-  lobbyIdEl.textContent = lobbyId || "-";
+  const newName = nameInput.value.trim();
 
-  copyBtn.onclick = () => {
-    navigator.clipboard.writeText(lobbyId);
-    status.textContent = "Lobby ID copied";
-  };
-
-  function sendName(name) {
-    if (!name.trim()) return;
-    ws.send(JSON.stringify({ type: "setName", name: name.trim() }));
+  if(newName && newName !== myName){
+    if(nameUpdateTimeout) clearTimeout(nameUpdateTimeout);
+    sendName(newName);
   }
 
-  nameInput.addEventListener("input", () => {
-    const newName = nameInput.value.trim();
-    if (newName === myName) return;
-    if (nameUpdateTimeout) clearTimeout(nameUpdateTimeout);
-    if (newName === "") {
-      readyBtn.disabled = true;
-      nameError.textContent = "";
-      return;
-    }
-    nameUpdateTimeout = setTimeout(() => sendName(newName), 300);
-  });
+});
 
-  nameInput.addEventListener("blur", () => {
-    const newName = nameInput.value.trim();
-    if (newName && newName !== myName) {
-      if (nameUpdateTimeout) clearTimeout(nameUpdateTimeout);
-      sendName(newName);
-    }
-  });
+ws.onopen = () => {
 
-  ws.onopen = () => {
-    status.textContent = "Connected";
-    const saved = sessionStorage.getItem('playerName');
-    if (saved) {
-      nameInput.value = saved;
-      sendName(saved);
-    }
-  };
+  status.textContent = "Connected";
 
-  ws.onclose = () => { status.textContent = "Disconnected"; };
+  const saved = sessionStorage.getItem('playerName');
 
-  ws.onmessage = (ev) => {
-    const msg = JSON.parse(ev.data);
-
-    if (msg.type === "welcome") {
-      myId = msg.id;
-      if (msg.isHost) startBtn.style.display = "inline";
-    }
-
-    if (msg.type === "lobby") {
-      renderPlayers(msg.players, msg.hostId);
-      if (myId === msg.hostId) {
-        const allReady = msg.players.length >= 1 && msg.players.every(p => p.ready && p.name);
-        startBtn.disabled = !allReady;
-      }
-    }
-
-    if (msg.type === "nameTaken") {
-      nameError.textContent = "Name already taken";
-      readyBtn.disabled = true;
-      myName = null;
-    }
-
-    if (msg.type === "start") {
-      window.location.href = "/game?lobby=" + lobbyId + "&pid=" + myId;
-    }
-  };
-
-  function renderPlayers(players, hostId) {
-    const me = players.find(p => p.id === myId);
-    if (me) {
-      readyBtn.disabled = !me.name;
-      myName = me.name;
-      if (me.name) nameError.textContent = "";
-    } else {
-      readyBtn.disabled = true;
-    }
-    playersEl.innerHTML = players.map(p => {
-      const readyIcon = p.ready ? "🟢" : "⚪";
-      const crown = p.id === hostId ? "👑" : "";
-      return `<div class="player">
-        <span class="status">${readyIcon}</span>
-        <span class="name">${p.name || "(unnamed)"}</span>
-        <span class="host">${crown}</span>
-      </div>`;
-    }).join("");
+  if(saved){
+    nameInput.value = saved;
+    sendName(saved);
   }
 
-  readyBtn.onclick = () => ws.send(JSON.stringify({ type: "ready" }));
-  startBtn.onclick = () => ws.send(JSON.stringify({ type: "startGame" }));
+};
+
+ws.onclose = () => {
+  status.textContent = "Disconnected";
+};
+
+ws.onmessage = (ev)=>{
+
+const msg = JSON.parse(ev.data);
+
+if(msg.type === "welcome"){
+  myId = msg.id;
+  if(msg.isHost){
+    startBtn.style.display = "inline";
+  }
+}
+
+if(msg.type === "lobby"){
+
+  renderPlayers(msg.players,msg.hostId);
+
+  if(myId === msg.hostId){
+
+    const allReady =
+      msg.players.length >= 1 &&
+      msg.players.every(p => p.ready && p.name);
+
+    startBtn.disabled = !allReady;
+  }
+
+}
+
+if(msg.type === "nameTaken"){
+  nameError.textContent = "Name already taken";
+  readyBtn.disabled = true;
+  myName = null;
+}
+
+if(msg.type === "start"){
+  window.location.href = "/game?lobby=" + lobbyId + "&pid=" + myId;
+}
+
+};
+
+function renderPlayers(players,hostId){
+
+const me = players.find(p => p.id === myId);
+
+if(me){
+  readyBtn.disabled = !me.name;
+  myName = me.name;
+  if(me.name) nameError.textContent = "";
+}else{
+  readyBtn.disabled = true;
+}
+
+playersEl.innerHTML = players.map(p=>{
+
+const readyIcon = p.ready ? "🟢" : "⚪";
+const crown = p.id === hostId ? "👑" : "";
+
+return `
+<div class="player">
+<div class="avatar ${p.ready ? "ready" : ""}">🎮</div>
+<span class="status">${readyIcon}</span>
+<span class="name">${p.name || "(unnamed)"}</span>
+<span class="host">${crown}</span>
+</div>
+`;
+
+}).join("");
+
+}
+
+readyBtn.onclick = ()=>{
+ws.send(JSON.stringify({type:"ready"}));
+};
+
+startBtn.onclick = ()=>{
+ws.send(JSON.stringify({type:"startGame"}));
+};
+
 })();
+
 </script>
+
 </body>
 </html>

@@ -67,13 +67,51 @@ bgMusic.volume = 0.2;
 bgMusic.load();
 
 let isMuted = false;
+let bgMusicRequested = false;
+let bgMusicStarted = false;
+let bgMusicRetryTimer = null;
+
+function clearBgMusicRetry() {
+  if (bgMusicRetryTimer) {
+    clearInterval(bgMusicRetryTimer);
+    bgMusicRetryTimer = null;
+  }
+}
+
+function tryStartBgMusic() {
+  if (!bgMusicRequested || bgMusicStarted) return;
+  bgMusic.volume = isMuted ? 0 : 0.2;
+
+  const playPromise = bgMusic.play();
+  if (playPromise && typeof playPromise.then === 'function') {
+    playPromise
+      .then(() => {
+        bgMusicStarted = true;
+        clearBgMusicRetry();
+      })
+      .catch(() => {
+        // Autoplay can be blocked until user interaction.
+      });
+  } else {
+    bgMusicStarted = true;
+    clearBgMusicRetry();
+  }
+}
 
 function startBgMusic() {
-  bgMusic.volume = isMuted ? 0 : 0.2;
-  bgMusic.play().catch(e => console.log('BG music failed:', e));
+  bgMusicRequested = true;
+  bgMusicStarted = false;
+  tryStartBgMusic();
+
+  if (!bgMusicRetryTimer) {
+    bgMusicRetryTimer = setInterval(tryStartBgMusic, 1000);
+  }
 }
 
 function stopBgMusic() {
+  bgMusicRequested = false;
+  bgMusicStarted = false;
+  clearBgMusicRetry();
   bgMusic.pause();
   bgMusic.currentTime = 0;
 }
@@ -83,8 +121,21 @@ function toggleSound() {
   bgMusic.volume = isMuted ? 0 : 0.2;
   winSound.volume = isMuted ? 0 : 1;
   minusHpSound.volume = isMuted ? 0 : 1;
+  if (!isMuted) {
+    tryStartBgMusic();
+  }
   updateSoundButton();
 }
+
+['pointerdown', 'touchstart', 'keydown'].forEach(eventName => {
+  window.addEventListener(eventName, tryStartBgMusic, { passive: true });
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    tryStartBgMusic();
+  }
+});
 
 // ===============================
 // MULTIPLAYER STATE
@@ -199,6 +250,8 @@ function initGame() {
       scaleGameArea();
       state.running = true;
       startBgMusic();
+      // Retry immediately once the game becomes visible on screen.
+      setTimeout(tryStartBgMusic, 0);
       startRenderLoop();
     }
   }, 50);
@@ -399,6 +452,7 @@ function spawnRedObstacle(track, lane, serverId, spawnTimer) {   // <-- added sp
     track,
     lane,
     x: startX,
+    serverX: startX,
     width: CONFIG.obstacleWidth,
     el,
     // removed hit flag (no client collision)
@@ -426,6 +480,7 @@ function spawnBlueObstacleSet(track, direction, serverId, spawnTimer) {   // <--
     serverId,
     track,
     x: startX,
+    serverX: startX,
     group,
     width: CONFIG.obstacleWidth,
     direction,
@@ -453,7 +508,7 @@ function syncObstaclesFromServer(serverRed, serverBlue) {
     if (!local) return;
     local.track = ob.track;
     local.lane = ob.lane;
-    local.x = ob.x;
+    local.serverX = ob.x;
     local.width = ob.width || CONFIG.obstacleWidth;
   });
 
@@ -470,7 +525,7 @@ function syncObstaclesFromServer(serverRed, serverBlue) {
     if (!local) return;
     local.track = ob.track;
     local.direction = ob.direction;
-    local.x = ob.x;
+    local.serverX = ob.x;
     local.width = ob.width || CONFIG.obstacleWidth;
   });
 
@@ -496,6 +551,12 @@ function getTrackTop(trackIndex) {
 
 function updateObstacles(delta) {
   obstacles = obstacles.filter(ob => {
+    // Predict motion every frame, then smoothly correct to latest server snapshot.
+    ob.x -= state.speed * delta;
+    if (typeof ob.serverX === "number") {
+      const correction = ob.serverX - ob.x;
+      ob.x += correction * Math.min(1, delta * 12);
+    }
 
     if (ob.kind === "red") {
       ob.el.style.top = getTrackTop(ob.track) + ob.lane * CONFIG.laneHeight + "px";

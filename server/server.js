@@ -40,6 +40,14 @@ const MODE_CONFIG = {
     minBlueGap: 900
   }
 };
+
+const OBSTACLE_BATCH_SIZE = {
+  easy: 4,
+  hard: 6
+};
+
+const OBSTACLE_BROADCAST_LOOKAHEAD = 1200;
+const GAMESTATE_BROADCAST_INTERVAL_MS = 33; // ~30 Hz snapshots
 CONFIG.tickRate = 1000 / 60;
 
 function freshGameState() {
@@ -76,7 +84,8 @@ function createLobby() {
     gameState: freshGameState(),
     nextPlayerId: 1,
     loopInterval: null,
-    lastTick: null
+    lastTick: null,
+    lastBroadcastAt: 0
   };
   return id;
 }
@@ -180,78 +189,78 @@ function tickLobby(lobbyId, delta) {
   }
   // ----------------------------------------
 
-  // ---------- spawning (unchanged except we now store obstacles) ----------
+  // ---------- spawning in batches to reduce generation churn ----------
   gameState.lastSpawn += delta * 1000;
   if (gameState.lastSpawn >= gameState.nextSpawnInterval) {
-    spawnObstaclesFor(lobbyId);
+    const wavesPerBatch = OBSTACLE_BATCH_SIZE[lobby.mode] || OBSTACLE_BATCH_SIZE.easy;
+    const nextBatchDelay = spawnObstaclesFor(lobbyId, wavesPerBatch);
     gameState.lastSpawn = 0;
-    gameState.nextSpawnInterval = getRandomSpawnInterval(gameState.speed, lobby.mode);
+    gameState.nextSpawnInterval = nextBatchDelay;
   }
   // -------------------------------------------------------------------------
 
   checkWinnerLobby(lobbyId);
-  broadcastGameStateFor(lobbyId);
+  const nowMs = Date.now();
+  if (nowMs - lobby.lastBroadcastAt >= GAMESTATE_BROADCAST_INTERVAL_MS) {
+    lobby.lastBroadcastAt = nowMs;
+    broadcastGameStateFor(lobbyId);
+  }
 }
 
-function spawnObstaclesFor(lobbyId) {
+function spawnObstaclesFor(lobbyId, waveCount = 1) {
   const lobby = lobbies[lobbyId];
   if (!lobby) return;
   const gameState = lobby.gameState;
   const modeSettings = getModeSettings(lobby.mode);
-
-  const now = gameState.timer * 1000;
-  const allowBlue = now - gameState.lastBlueSpawn > modeSettings.minBlueGap;
   const activeTracks = Object.values(gameState.players).map(p => p.track);
 
-  if (Math.random() < 0.6 || !allowBlue) {
-    const sharedLane = Math.floor(Math.random() * CONFIG.lanesPerTrack);
-    // spawn red obstacles for each active track
-    activeTracks.forEach(track => {
-      const id = gameState.nextObstacleId++;
-      const obstacle = {
-        id,
-        kind: 'red',
-        track,
-        lane: sharedLane,
-        x: CONFIG.gameWidth,
-        width: CONFIG.obstacleWidth
-      };
-      gameState.obstacles.push(obstacle);
-      broadcastToLobby(lobbyId, {
-        type: 'spawnObstacle',
-        kind: 'red',
-        id,
-        track,
-        lane: sharedLane,
-        timer: gameState.timer    // <-- send server timer
+  let accumulatedSpawnDelayMs = 0;
+
+  for (let wave = 0; wave < waveCount; wave++) {
+    if (wave > 0) {
+      accumulatedSpawnDelayMs += getRandomSpawnInterval(gameState.speed, lobby.mode);
+    }
+
+    const plannedSpawnMs = gameState.timer * 1000 + accumulatedSpawnDelayMs;
+    const allowBlue = plannedSpawnMs - gameState.lastBlueSpawn > modeSettings.minBlueGap;
+    const spawnX = CONFIG.gameWidth + gameState.speed * (accumulatedSpawnDelayMs / 1000);
+
+    if (Math.random() < 0.6 || !allowBlue) {
+      const sharedLane = Math.floor(Math.random() * CONFIG.lanesPerTrack);
+      activeTracks.forEach(track => {
+        const id = gameState.nextObstacleId++;
+        const obstacle = {
+          id,
+          kind: 'red',
+          track,
+          lane: sharedLane,
+          x: spawnX,
+          width: CONFIG.obstacleWidth
+        };
+        gameState.obstacles.push(obstacle);
       });
-    });
-  } else {
-    const direction = Math.random() > 0.5 ? 'left' : 'right';
-    // create one blue set per active track
-    activeTracks.forEach(track => {
-      const id = gameState.nextObstacleId++;
-      const blueSet = {
-        id,
-        kind: 'blue',
-        track,
-        direction,
-        x: CONFIG.gameWidth,
-        width: CONFIG.obstacleWidth,
-        processedPlayers: new Set()
-      };
-      gameState.blueSets.push(blueSet);
-      broadcastToLobby(lobbyId, {
-        type: 'spawnObstacle',
-        kind: 'blue',
-        id,
-        track,
-        direction,
-        timer: gameState.timer
+    } else {
+      const direction = Math.random() > 0.5 ? 'left' : 'right';
+      activeTracks.forEach(track => {
+        const id = gameState.nextObstacleId++;
+        const blueSet = {
+          id,
+          kind: 'blue',
+          track,
+          direction,
+          x: spawnX,
+          width: CONFIG.obstacleWidth,
+          processedPlayers: new Set()
+        };
+        gameState.blueSets.push(blueSet);
       });
-    });
-    gameState.lastBlueSpawn = now;
+      gameState.lastBlueSpawn = plannedSpawnMs;
+    }
   }
+
+  // Add one more gap so the next batch doesn't overlap this batch's last wave.
+  const handoffGapMs = getRandomSpawnInterval(gameState.speed, lobby.mode);
+  return Math.max(1, accumulatedSpawnDelayMs + handoffGapMs);
 }
 
 function initGamePlayersFor(lobbyId) {
@@ -348,13 +357,17 @@ function broadcastGameStateFor(lobbyId) {
   const lobby = lobbies[lobbyId];
   if (!lobby) return;
   const gameState = lobby.gameState;
+  const visibleMaxX = CONFIG.gameWidth + OBSTACLE_BROADCAST_LOOKAHEAD;
+
   broadcastToLobby(lobbyId, {
     type: "gameState",
     timer: gameState.timer,
     speed: gameState.speed,
     paused: gameState.paused,
     pausedBy: gameState.pausedBy,
-    obstacles: gameState.obstacles.map(ob => ({
+    obstacles: gameState.obstacles
+      .filter(ob => ob.x <= visibleMaxX)
+      .map(ob => ({
       id: ob.id,
       kind: ob.kind,
       track: ob.track,
@@ -362,7 +375,9 @@ function broadcastGameStateFor(lobbyId) {
       x: ob.x,
       width: ob.width
     })),
-    blueSets: gameState.blueSets.map(bs => ({
+    blueSets: gameState.blueSets
+      .filter(bs => bs.x <= visibleMaxX)
+      .map(bs => ({
       id: bs.id,
       kind: bs.kind,
       track: bs.track,
@@ -432,14 +447,19 @@ wss.on('connection', (ws, req) => {
 
   const lobby = lobbies[lobbyId];
 
-  // Reconnect: player is returning to game page after lobby redirect
-  if (lobby.started && pid) {
+  // During an active game, only known players can reconnect.
+  if (lobby.started && !lobby.gameState.winner) {
+    if (!pid) {
+      ws.send(JSON.stringify({ type: 'rejected', reason: 'Game already started' }));
+      ws.close();
+      return;
+    }
+
     const numPid = Number(pid);
     const gamePlayer = lobby.gameState.players[numPid];
-    const lobbyPlayer = lobby.players[numPid];
 
     if (!gamePlayer) {
-      ws.send(JSON.stringify({ type: 'rejected', reason: 'Player not found in game' }));
+      ws.send(JSON.stringify({ type: 'rejected', reason: 'Game already started' }));
       ws.close();
       return;
     }
@@ -461,6 +481,13 @@ wss.on('connection', (ws, req) => {
 
     ws.on('close', () => {
       if (lobby.players[numPid]) delete lobby.players[numPid];
+
+      if (lobby.hostId === numPid) {
+        const remaining = Object.keys(lobby.players);
+        lobby.hostId = remaining.length > 0 ? Number(remaining[0]) : null;
+        broadcastHostChange(lobbyId);
+      }
+
       if (Object.keys(lobby.players).length === 0) {
         lobby.started = false;
         lobby.hostId = null;
@@ -474,12 +501,6 @@ wss.on('connection', (ws, req) => {
       broadcastLobbyFor(lobbyId);
     });
 
-    return;
-  }
-
-  if (lobby.started && !lobby.gameState.winner) {
-    ws.send(JSON.stringify({ type: 'rejected', reason: 'Game already started' }));
-    ws.close();
     return;
   }
 

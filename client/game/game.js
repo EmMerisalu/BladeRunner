@@ -33,6 +33,60 @@ CONFIG.trackHeight = CONFIG.lanesPerTrack * CONFIG.laneHeight + CONFIG.trackSpac
 const PLAYER_COLORS = ["cyan", "orange", "lime", "magenta"];
 
 // ===============================
+// SOUND
+// ===============================
+function playMoveSound() {
+  const sound = new Audio('/sounds/move.wav');
+  sound.volume = isMuted ? 0 : 1;
+  sound.play();
+}
+
+const winSound = new Audio('/sounds/win.wav');
+winSound.volume = 1;
+winSound.load();
+
+function playWinSound() {
+  winSound.currentTime = 0;
+  winSound.volume = isMuted ? 0 : 1;
+  winSound.play().catch(e => console.log('Win sound failed:', e));
+}
+
+const minusHpSound = new Audio('/sounds/minus-hp.wav');
+minusHpSound.volume = 1;
+minusHpSound.load();
+
+function playMinusHpSound() {
+  minusHpSound.currentTime = 0;
+  minusHpSound.volume = isMuted ? 0 : 1;
+  minusHpSound.play().catch(e => console.log('Minus HP sound failed:', e));
+}
+
+const bgMusic = new Audio('/sounds/Pixel-Peeker-Polka-faster(chosic.com).mp3');
+bgMusic.loop = true;
+bgMusic.volume = 0.2;
+bgMusic.load();
+
+let isMuted = false;
+
+function startBgMusic() {
+  bgMusic.volume = isMuted ? 0 : 0.2;
+  bgMusic.play().catch(e => console.log('BG music failed:', e));
+}
+
+function stopBgMusic() {
+  bgMusic.pause();
+  bgMusic.currentTime = 0;
+}
+
+function toggleSound() {
+  isMuted = !isMuted;
+  bgMusic.volume = isMuted ? 0 : 0.2;
+  winSound.volume = isMuted ? 0 : 1;
+  minusHpSound.volume = isMuted ? 0 : 1;
+  updateSoundButton();
+}
+
+// ===============================
 // MULTIPLAYER STATE
 // ===============================
 let ws = null;
@@ -79,6 +133,9 @@ function handleServerMessage(msg) {
       serverPlayers[sp.id] = sp;
 
       if (players[sp.id]) {
+        if (sp.id === myId && sp.hp < players[sp.id].hp) {
+          playMinusHpSound();
+        }
         players[sp.id].hp = sp.hp;
         players[sp.id].maxHp = sp.maxHp;
         players[sp.id].falling = sp.falling;
@@ -144,6 +201,7 @@ function initGame() {
       createTrackLines();   // <-- now includes top double lines
       scaleGameArea();
       state.running = true;
+      startBgMusic();
       startRenderLoop();
     }
   }, 50);
@@ -504,6 +562,23 @@ function render() {
     const newText = `${sp.name}: ${hearts}`;
     if (row.textContent !== newText) row.textContent = newText;
   });
+
+  // Sound button
+  let soundBtn = document.getElementById("soundBtn");
+  if (!soundBtn) {
+    soundBtn = document.createElement("button");
+    soundBtn.id = "soundBtn";
+    soundBtn.onclick = toggleSound;
+    document.getElementById("ui").appendChild(soundBtn);
+  }
+  updateSoundButton();
+}
+
+function updateSoundButton() {
+  const soundBtn = document.getElementById("soundBtn");
+  if (soundBtn) {
+    soundBtn.textContent = isMuted ? "🔇 Sound: Off" : "🔊 Sound: On";
+  }
 }
 
 // ===============================
@@ -543,6 +618,14 @@ function showPauseOverlay(paused, pausedBy) {
 }
 
 function showGameOver(winner, playerTimes = []) {
+  // Play win sound if this player won
+  if (winner !== "No one" && winner === serverPlayers[myId]?.name) {
+    playWinSound();
+  }
+
+  // Stop background music
+  stopBgMusic();
+
   const overlay = document.createElement("div");
   overlay.id = "gameOverOverlay";
   overlay.style = `
@@ -643,16 +726,16 @@ document.addEventListener("keydown", (e) => {
   if (!myPlayer || myPlayer.falling) return;
 
   if (e.key === "a" || e.key === "ArrowLeft") {
-    if (!holdingLeft) { holdingLeft = true; myPlayer.dodge = "left"; sendInput("dodgeLeft"); }
+    if (!holdingLeft) { holdingLeft = true; myPlayer.dodge = "left"; sendInput("dodgeLeft");}
   }
   if (e.key === "d" || e.key === "ArrowRight") {
-    if (!holdingRight) { holdingRight = true; myPlayer.dodge = "right"; sendInput("dodgeRight"); }
+    if (!holdingRight) { holdingRight = true; myPlayer.dodge = "right"; sendInput("dodgeRight");}
   }
   if (e.key === "w" || e.key === "ArrowUp") {
-    if (myPlayer.lane > 0) { myPlayer.lane--; sendInput("laneUp"); }
+    if (myPlayer.lane > 0) { myPlayer.lane--; sendInput("laneUp"); playMoveSound(); }
   }
   if (e.key === "s" || e.key === "ArrowDown") {
-    if (myPlayer.lane < CONFIG.lanesPerTrack - 1) { myPlayer.lane++; sendInput("laneDown"); }
+    if (myPlayer.lane < CONFIG.lanesPerTrack - 1) { myPlayer.lane++; sendInput("laneDown"); playMoveSound(); }
   }
   if (e.key === " ") {
     if (myPlayer.y === 0) { myPlayer.jumping = true; sendInput("jump"); }

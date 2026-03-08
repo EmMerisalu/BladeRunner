@@ -1,6 +1,6 @@
-# Multiplayer Game Server
+# BladeRunner Web Game
 
-Node.js + WebSocket server for the multiplayer game lobby and gameplay.
+Node.js + WebSocket game server with both multiplayer and single-player (NPC) gameplay.
 
 ---
 
@@ -37,7 +37,7 @@ project-root/
     └ game/
 ```
 
-The server hosts the client files and handles WebSocket multiplayer connections.
+The server hosts all client pages and handles game state for human and virtual players.
 
 ---
 
@@ -101,6 +101,31 @@ Then:
 
 ---
 
+# Single-Player Mode (NPC Opponents)
+
+From the main menu, choose **Single Player (offline lobby with NPCs)** to create an offline-only lobby where only the lead player can connect.
+
+In single-player mode:
+
+- Additional incoming player connections are refused by the server.
+- You can configure **1 to 3 virtual opponents** (2-4 total players in a match).
+- Each opponent can be configured with a difficulty only:
+  - `easy`
+  - `medium`
+  - `hard`
+- Bot names are generated automatically (and can be re-rolled in the menu).
+- The menu shows a pre-game **effectiveness score** (`0-100`) per bot.
+- Difficulty acts as a multiplier, so a high-skill bot in `hard` mode is significantly stronger.
+
+NPC behavior is server-authoritative and intentionally imperfect:
+
+- Easy bots can miss obvious plays and fail to execute plans.
+- Medium bots are generally reliable and competitive.
+- Hard bots react quickly and execute plans with high consistency.
+- Bots also compete against each other, not only against the human player.
+
+---
+
 # Creating a Lobby (API)
 
 The server creates lobbies through:
@@ -119,6 +144,21 @@ Example response:
 ```
 
 Players must join using the lobby URL.
+
+`POST /create-lobby` also accepts optional single-player settings in the request body:
+
+```json
+{
+  "singlePlayer": true,
+  "botCount": 3,
+  "bots": [
+    {
+      "name": "Steel Runner",
+      "difficulty": "easy"
+    }
+  ]
+}
+```
 
 ---
 

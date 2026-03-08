@@ -26,6 +26,8 @@ Lobby ID: <span id="lobbyId">-</span>
 <button id="copyId">Copy</button>
 </div>
 
+<div id="playModeMeta" class="meta">Mode: Multiplayer</div>
+
 <div class="name-row">
   <input id="nameInput" type="text" placeholder="Enter your name..." maxlength="16">
   <div id="nameError" class="error-message"></div>
@@ -34,9 +36,10 @@ Lobby ID: <span id="lobbyId">-</span>
 <div id="players" class="players"></div>
 
 <div class="name-row">
-  <label for="modeSelect">Mode</label>
+  <label for="modeSelect">Challenge Mode</label>
   <select id="modeSelect" disabled>
     <option value="easy">Easy</option>
+    <option value="medium" selected>Medium</option>
     <option value="hard">Hard</option>
   </select>
 </div>
@@ -79,6 +82,7 @@ const status = document.getElementById('status');
 const nameInput = document.getElementById('nameInput');
 const nameError = document.getElementById('nameError');
 const modeSelect = document.getElementById('modeSelect');
+const playModeMeta = document.getElementById('playModeMeta');
 
 let myId = null;
 let myName = null;
@@ -161,13 +165,15 @@ if(msg.type === "lobby"){
 
   renderPlayers(msg.players,msg.hostId);
   if (msg.mode) modeSelect.value = msg.mode;
+  playModeMeta.textContent = msg.singlePlayer ? 'Mode: Single Player (offline)' : 'Mode: Multiplayer';
 
   if(myId === msg.hostId){
     // show start button when this client becomes host
     startBtn.style.display = "inline";
     modeSelect.disabled = false;
     const allReady =
-      msg.players.length >= 1 &&
+      msg.players.length >= 2 &&
+      msg.players.length <= 4 &&
       msg.players.every(p => p.ready && p.name);
 
     startBtn.disabled = !allReady;
@@ -194,6 +200,10 @@ if(msg.type === "nameTaken"){
   nameError.textContent = "Name already taken";
   readyBtn.disabled = true;
   myName = null;
+}
+
+if(msg.type === "rejected"){
+  status.textContent = msg.reason || "Connection rejected";
 }
 
 if(msg.type === "start"){
@@ -328,12 +338,17 @@ playersEl.innerHTML = players.map(p=>{
 
 const readyIcon = p.ready ? "🟢" : "⚪";
 const crown = p.id === hostId ? "👑" : "";
+const role = p.isBot ? "🤖" : "🎮";
+const botLabel = p.isBot && p.botProfile
+  ? `${p.botProfile.difficulty.toUpperCase()} | ${p.botProfile.effectiveness}/100`
+  : '';
 
 return `
 <div class="player">
-<div class="avatar ${p.ready ? "ready" : ""}">🎮</div>
+<div class="avatar ${p.ready ? "ready" : ""}">${role}</div>
 <span class="status">${readyIcon}</span>
 <span class="name">${p.name || "(unnamed)"}</span>
+<span class="bot-meta">${botLabel}</span>
 <span class="host">${crown}</span>
 </div>
 `;

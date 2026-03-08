@@ -92,6 +92,16 @@ width:24px;
 flex:1;
 }
 
+.bot-meta{
+font-size:11px;
+color:#a8bbdd;
+margin-right:8px;
+white-space:nowrap;
+overflow:hidden;
+text-overflow:ellipsis;
+max-width:170px;
+}
+
 .controls{
 display:flex;
 gap:8px;

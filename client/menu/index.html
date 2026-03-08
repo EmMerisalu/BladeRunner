@@ -14,6 +14,29 @@
 <label for="username">Username</label>
 <input id="username" type="text" placeholder="Type something">
 
+<div class="mode-panel">
+  <div class="mode-title">Play Mode</div>
+  <label class="mode-option">
+    <input type="radio" name="playMode" value="multi" checked>
+    <span>Multiplayer (online lobby)</span>
+  </label>
+  <label class="mode-option">
+    <input type="radio" name="playMode" value="single">
+    <span>Single Player (offline lobby with NPCs)</span>
+  </label>
+
+  <div id="singlePlayerConfig" class="single-player-config hidden">
+    <label for="botCount">Virtual Opponents</label>
+    <select id="botCount">
+      <option value="1">1 opponent (2 players total)</option>
+      <option value="2" selected>2 opponents (3 players total)</option>
+      <option value="3">3 opponents (4 players total)</option>
+    </select>
+
+    <div id="botCards" class="bot-cards"></div>
+  </div>
+</div>
+
 <div class="buttons">
 <button id="createBtn" class="create" disabled>Create Lobby</button>
 <button id="joinBtn" class="join" disabled>Join Lobby</button>
@@ -27,31 +50,151 @@ document.addEventListener('DOMContentLoaded', () => {
   const input = document.getElementById('username');
   const createBtn = document.getElementById('createBtn');
   const joinBtn = document.getElementById('joinBtn');
+  const modeInputs = Array.from(document.querySelectorAll('input[name="playMode"]'));
+  const singlePlayerConfig = document.getElementById('singlePlayerConfig');
+  const botCountSelect = document.getElementById('botCount');
+  const botCardsEl = document.getElementById('botCards');
+
+  const BOT_NAME_PREFIX = ['Steel', 'Nova', 'Shadow', 'Turbo', 'Alpha', 'Ghost', 'Neon', 'Echo', 'Delta', 'Viper'];
+  const BOT_NAME_SUFFIX = ['Runner', 'Rider', 'Dash', 'Bolt', 'Drift', 'Byte', 'Spark', 'Flux', 'Core', 'Wing'];
+  const DIFFICULTY_SCORE = { easy: 45, medium: 70, hard: 100 };
 
   function updateButtons() {
     const ok = input.value.trim().length > 0;
     createBtn.disabled = !ok;
     joinBtn.disabled = !ok;
+    updateModeUI();
+  }
+
+  function getSelectedMode() {
+    const selected = modeInputs.find((radio) => radio.checked);
+    return selected ? selected.value : 'multi';
+  }
+
+  function updateModeUI() {
+    const single = getSelectedMode() === 'single';
+    const hasName = input.value.trim().length > 0;
+    singlePlayerConfig.classList.toggle('hidden', !single);
+    joinBtn.disabled = !hasName || single;
+    joinBtn.title = single
+      ? 'Single-player uses offline host-only lobbies. Create a lobby to play.'
+      : '';
+  }
+
+  function randomBotName() {
+    const prefix = BOT_NAME_PREFIX[Math.floor(Math.random() * BOT_NAME_PREFIX.length)];
+    const suffix = BOT_NAME_SUFFIX[Math.floor(Math.random() * BOT_NAME_SUFFIX.length)];
+    return `${prefix} ${suffix}`;
+  }
+
+  function calcEffectiveness(bot) {
+    return DIFFICULTY_SCORE[bot.difficulty] || DIFFICULTY_SCORE.medium;
+  }
+
+  function readBotFromCard(card) {
+    const nameInput = card.querySelector('.bot-name');
+    const difficultyInput = card.querySelector('.bot-difficulty');
+
+    return {
+      name: nameInput.value.trim() || randomBotName(),
+      difficulty: difficultyInput.value
+    };
+  }
+
+  function updateBotCardEffectiveness(card) {
+    const bot = readBotFromCard(card);
+    const scoreEl = card.querySelector('.bot-effectiveness-value');
+    scoreEl.textContent = String(calcEffectiveness(bot));
+  }
+
+  function createBotCard(index, defaults) {
+    const card = document.createElement('div');
+    card.className = 'bot-card';
+    card.innerHTML = `
+      <div class="bot-card-header">Opponent ${index + 1}</div>
+      <label>Generated Name</label>
+      <input class="bot-name" type="text" maxlength="16" value="${defaults.name}" readonly>
+      <button type="button" class="reroll-name">Randomize Name</button>
+      <label>Difficulty</label>
+      <select class="bot-difficulty">
+        <option value="easy" ${defaults.difficulty === 'easy' ? 'selected' : ''}>Easy</option>
+        <option value="medium" ${defaults.difficulty === 'medium' ? 'selected' : ''}>Medium</option>
+        <option value="hard" ${defaults.difficulty === 'hard' ? 'selected' : ''}>Hard</option>
+      </select>
+      <div class="bot-effectiveness">Effectiveness: <span class="bot-effectiveness-value">0</span>/100</div>
+    `;
+
+    const nameInput = card.querySelector('.bot-name');
+    const rerollBtn = card.querySelector('.reroll-name');
+    const difficultySelect = card.querySelector('.bot-difficulty');
+
+    rerollBtn.addEventListener('click', () => {
+      nameInput.value = randomBotName();
+      updateBotCardEffectiveness(card);
+    });
+
+    difficultySelect.addEventListener('change', () => {
+      // Refresh the generated name when users change difficulty.
+      nameInput.value = randomBotName();
+      updateBotCardEffectiveness(card);
+    });
+
+    updateBotCardEffectiveness(card);
+    return card;
+  }
+
+  function renderBotCards() {
+    const count = Number(botCountSelect.value);
+    botCardsEl.innerHTML = '';
+    const defaults = ['easy', 'medium', 'hard'];
+    for (let i = 0; i < count; i++) {
+      botCardsEl.appendChild(createBotCard(i, { name: randomBotName(), difficulty: defaults[i] || 'medium' }));
+    }
+  }
+
+  function getSinglePlayerSettings() {
+    const count = Number(botCountSelect.value);
+    const cards = Array.from(botCardsEl.querySelectorAll('.bot-card')).slice(0, count);
+    return {
+      singlePlayer: true,
+      botCount: count,
+      bots: cards.map(readBotFromCard)
+    };
   }
 
   input.addEventListener('input', updateButtons);
+  modeInputs.forEach((radio) => radio.addEventListener('change', updateModeUI));
+  botCountSelect.addEventListener('change', renderBotCards);
   updateButtons();
+  updateModeUI();
+  renderBotCards();
 
   const saved = sessionStorage.getItem('playerName');
   if (saved) {
     input.value = saved;
     updateButtons();
+    updateModeUI();
   }
 
   createBtn.addEventListener('click', async () => {
     const name = input.value.trim();
     if (!name) return;
+    const selectedMode = getSelectedMode();
+    const payload = selectedMode === 'single'
+      ? { name, ...getSinglePlayerSettings() }
+      : { name, singlePlayer: false };
+
     try {
       const res = await fetch('/create-lobby', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
+        body: JSON.stringify(payload)
       });
+
+      if (!res.ok) {
+        throw new Error(`Failed with status ${res.status}`);
+      }
+
       const data = await res.json();
       sessionStorage.setItem('playerName', name);
       window.location.href = data.url;
@@ -64,6 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
   joinBtn.addEventListener('click', () => {
     const name = input.value.trim();
     if (!name) return;
+    if (getSelectedMode() === 'single') return;
     const lobbyId = prompt('Enter lobby ID');
     if (!lobbyId) return;
     sessionStorage.setItem('playerName', name);

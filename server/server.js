@@ -28,10 +28,15 @@ const CONFIG = {
 };
 
 const MODE_CONFIG = {
-   easy: {
+  easy: {
     spawnIntervalMin: 500,
     spawnIntervalMax: 1200,
     minBlueGap: 1000
+  },
+  medium: {
+    spawnIntervalMin: 350,
+    spawnIntervalMax: 1000,
+    minBlueGap: 950
   },
   hard: {
     spawnIntervalMin: 250,
@@ -42,8 +47,45 @@ const MODE_CONFIG = {
 
 const OBSTACLE_BATCH_SIZE = {
   easy: 4,
+  medium: 5,
   hard: 6
 };
+
+const BOT_DIFFICULTY_PROFILE = {
+  easy: {
+    decisionMin: 0.24,
+    decisionMax: 0.72,
+    executeChance: 0.62,
+    awarenessRange: 320,
+    laneWeight: 0.9,
+    dodgeWeight: 0.85,
+    chaos: 0.28,
+    effectiveness: 45
+  },
+  medium: {
+    decisionMin: 0.18,
+    decisionMax: 0.5,
+    executeChance: 0.82,
+    awarenessRange: 440,
+    laneWeight: 1,
+    dodgeWeight: 1,
+    chaos: 0.14,
+    effectiveness: 70
+  },
+  hard: {
+    decisionMin: 0.015,
+    decisionMax: 0.04,
+    executeChance: 0.9997,
+    awarenessRange: 1050,
+    laneWeight: 1.5,
+    dodgeWeight: 1.5,
+    chaos: 0.002,
+    effectiveness: 100
+  }
+};
+
+const BOT_NAME_PREFIX = ['Steel', 'Nova', 'Shadow', 'Turbo', 'Alpha', 'Ghost', 'Neon', 'Echo', 'Delta', 'Viper'];
+const BOT_NAME_SUFFIX = ['Runner', 'Rider', 'Dash', 'Bolt', 'Drift', 'Byte', 'Spark', 'Flux', 'Core', 'Wing'];
 
 const OBSTACLE_BROADCAST_LOOKAHEAD = 1200;
 const GAMESTATE_BROADCAST_INTERVAL_MS = 33; 
@@ -72,13 +114,141 @@ function freshGameState() {
 
 const lobbies = {};
 
-function createLobby() {
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function sanitizeDifficulty(value) {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized === 'easy' || normalized === 'medium' || normalized === 'hard') {
+    return normalized;
+  }
+  return 'medium';
+}
+
+function generateBotName(takenNames = new Set()) {
+  let attempts = 0;
+  while (attempts < 30) {
+    attempts++;
+    const candidate = `${BOT_NAME_PREFIX[Math.floor(Math.random() * BOT_NAME_PREFIX.length)]} ${BOT_NAME_SUFFIX[Math.floor(Math.random() * BOT_NAME_SUFFIX.length)]}`;
+    if (!takenNames.has(candidate)) {
+      takenNames.add(candidate);
+      return candidate;
+    }
+  }
+
+  const fallback = `Bot ${Math.floor(100 + Math.random() * 900)}`;
+  takenNames.add(fallback);
+  return fallback;
+}
+
+function calculateEffectiveness(profile) {
+  const byDifficulty = BOT_DIFFICULTY_PROFILE[profile.difficulty] || BOT_DIFFICULTY_PROFILE.medium;
+  return byDifficulty.effectiveness;
+}
+
+function normalizeBotProfile(rawProfile, index, takenNames = new Set()) {
+  const difficulty = sanitizeDifficulty(rawProfile?.difficulty);
+  const requestedName = String(rawProfile?.name || '').trim().slice(0, 16);
+  const name = requestedName || generateBotName(takenNames);
+
+  const profile = {
+    name,
+    difficulty
+  };
+
+  return {
+    ...profile,
+    effectiveness: calculateEffectiveness(profile)
+  };
+}
+
+function defaultBotProfiles(botCount) {
+  const defaults = ['easy', 'medium', 'hard'];
+  const takenNames = new Set();
+  return Array.from({ length: botCount }, (_, index) => normalizeBotProfile({ difficulty: defaults[index] || 'medium' }, index, takenNames));
+}
+
+function buildBotRuntime(profile) {
+  const base = BOT_DIFFICULTY_PROFILE[profile.difficulty] || BOT_DIFFICULTY_PROFILE.medium;
+  // Keep hard bots consistently deadly while preserving variance for easier modes.
+  const jitter = profile.difficulty === 'hard'
+    ? Math.random() * 0.02
+    : (Math.random() - 0.5) * 0.12;
+
+  return {
+    profile,
+    decisionTimer: Math.random() * 0.25,
+    decisionMin: base.decisionMin,
+    decisionMax: base.decisionMax,
+    executeChance: clamp(base.executeChance + jitter, 0.35, 0.9995),
+    awarenessRange: clamp(base.awarenessRange + Math.round(jitter * 220), 220, 1100),
+    laneWeight: base.laneWeight,
+    dodgeWeight: base.dodgeWeight,
+    chaos: clamp(base.chaos + Math.abs(jitter) * 0.5, 0.04, 0.4)
+  };
+}
+
+function getHumans(lobby) {
+  return Object.values(lobby.players).filter(p => !p.isBot);
+}
+
+function getHumanCount(lobby) {
+  return getHumans(lobby).length;
+}
+
+function pickNextHost(lobby) {
+  const humans = getHumans(lobby);
+  lobby.hostId = humans.length > 0 ? humans[0].id : null;
+}
+
+function addSinglePlayerBotsToLobby(lobby) {
+  if (!lobby.singlePlayer) return;
+  const existingBots = Object.values(lobby.players).filter(p => p.isBot);
+  if (existingBots.length > 0) return;
+
+  const botProfiles = lobby.botProfiles.length > 0 ? lobby.botProfiles : defaultBotProfiles(lobby.botCount);
+  botProfiles.forEach((profile, index) => {
+    const id = lobby.nextPlayerId++;
+    lobby.players[id] = {
+      id,
+      name: profile.name,
+      ready: true,
+      track: index + 1,
+      ws: null,
+      isBot: true,
+      botProfile: profile,
+      ai: buildBotRuntime(profile)
+    };
+  });
+}
+
+function removeAllBots(lobby) {
+  Object.keys(lobby.players).forEach((playerId) => {
+    const p = lobby.players[playerId];
+    if (p && p.isBot) delete lobby.players[playerId];
+  });
+}
+
+function createLobby(settings = {}) {
+  const singlePlayer = Boolean(settings.singlePlayer);
+  const requestedBotCount = Number(settings.botCount) || 1;
+  const botCount = singlePlayer ? clamp(Math.round(requestedBotCount), 1, 3) : 0;
+  const requestedBots = Array.isArray(settings.bots) ? settings.bots : [];
+  const takenNames = new Set();
+  const botProfiles = singlePlayer
+    ? (requestedBots.length > 0 ? requestedBots.slice(0, botCount).map((b, i) => normalizeBotProfile(b, i, takenNames)) : defaultBotProfiles(botCount))
+    : [];
+
   const id = Math.random().toString(36).slice(2, 8);
   lobbies[id] = {
     players: {},
     started: false,
-    mode: 'easy',
+    mode: 'medium',
     hostId: null,
+    singlePlayer,
+    botCount,
+    botProfiles,
     gameState: freshGameState(),
     nextPlayerId: 1,
     loopInterval: null,
@@ -89,8 +259,7 @@ function createLobby() {
 }
 
 app.post('/create-lobby', (req, res) => {
-  const name = (req.body && req.body.name) ? String(req.body.name).trim() : null;
-  const id = createLobby();
+  const id = createLobby(req.body || {});
   res.json({ lobbyId: id, url: `/lobby?lobby=${id}` });
 });
 
@@ -146,7 +315,8 @@ function tickLobby(lobbyId, delta) {
   // remove off‑screen obstacles
   gameState.obstacles = gameState.obstacles.filter(ob => ob.x > -ob.width);
   gameState.blueSets = gameState.blueSets.filter(bs => bs.x > -bs.width);
-  // 
+  // Keep bot choices server-authoritative and in sync with current obstacle positions.
+  updateBotsForLobby(lobbyId);
 
   //red obstacle collision
   for (const ob of gameState.obstacles) {
@@ -270,17 +440,147 @@ function initGamePlayersFor(lobbyId) {
       id: p.id,
       track: p.track,
       name: p.name,
+      isBot: Boolean(p.isBot),
       lane: 1,
       dodge: null,
       hp: 5,
       maxHp: 5,
-      falling: false
+      falling: false,
+      ai: p.isBot ? buildBotRuntime(p.botProfile || normalizeBotProfile({}, p.track || 0)) : null
     };
+  });
+}
+
+function findNearestRedThreat(gameState, track, fromX, horizon) {
+  let nearest = null;
+  let minDist = Infinity;
+  for (const ob of gameState.obstacles) {
+    if (ob.track !== track) continue;
+    const dist = ob.x - fromX;
+    if (dist < -CONFIG.blueForgiveness || dist > horizon) continue;
+    if (dist < minDist) {
+      minDist = dist;
+      nearest = ob;
+    }
+  }
+  return nearest;
+}
+
+function findNearestBlueThreat(gameState, track, fromX, horizon) {
+  let nearest = null;
+  let minDist = Infinity;
+  for (const bs of gameState.blueSets) {
+    if (bs.track !== track) continue;
+    const dist = bs.x - fromX;
+    if (dist < -CONFIG.blueForgiveness || dist > horizon) continue;
+    if (dist < minDist) {
+      minDist = dist;
+      nearest = bs;
+    }
+  }
+  return nearest;
+}
+
+function scoreLaneRisk(gameState, track, lane, fromX, horizon) {
+  let risk = 0;
+  for (const ob of gameState.obstacles) {
+    if (ob.track !== track || ob.lane !== lane) continue;
+    const dist = ob.x - fromX;
+    if (dist < -CONFIG.blueForgiveness || dist > horizon) continue;
+    // Strongly prioritize immediate threats over far-away ones.
+    risk += 1 / Math.max(10, dist + 10);
+    risk += 1 / Math.max(40, (dist + 25) * (dist + 25));
+  }
+  return risk;
+}
+
+function chooseBestLane(gameState, player, ai) {
+  const horizon = ai.awarenessRange * ai.laneWeight;
+  let bestLane = player.lane;
+  let bestScore = scoreLaneRisk(gameState, player.track, player.lane, CONFIG.playerX, horizon);
+
+  for (let lane = 0; lane < CONFIG.lanesPerTrack; lane++) {
+    const laneRisk = scoreLaneRisk(gameState, player.track, lane, CONFIG.playerX, horizon);
+    const movePenalty = Math.abs(lane - player.lane) * 0.012;
+    const chaos = (Math.random() - 0.5) * ai.chaos * 0.04;
+    const score = laneRisk + movePenalty + chaos;
+    if (score < bestScore) {
+      bestScore = score;
+      bestLane = lane;
+    }
+  }
+
+  return bestLane;
+}
+
+function applyBotDecision(gameState, player) {
+  if (!player.ai || player.falling) return;
+  const ai = player.ai;
+  const isHard = ai.profile?.difficulty === 'hard';
+
+  ai.decisionTimer -= CONFIG.tickRate / 1000;
+  if (ai.decisionTimer > 0) return;
+  ai.decisionTimer = ai.decisionMin + Math.random() * (ai.decisionMax - ai.decisionMin);
+
+  const canExecute = Math.random() <= ai.executeChance;
+  const nearestBlue = findNearestBlueThreat(gameState, player.track, CONFIG.playerX, ai.awarenessRange * ai.dodgeWeight);
+  if (nearestBlue) {
+    const blueDist = nearestBlue.x - CONFIG.playerX;
+    const criticalBlue = isHard && blueDist < 340;
+    if (canExecute || criticalBlue) {
+      player.dodge = nearestBlue.direction;
+    } else if (Math.random() < 0.5) {
+      player.dodge = nearestBlue.direction === 'left' ? 'right' : 'left';
+    } else {
+      player.dodge = null;
+    }
+    // Hard bots should commit to the correct dodge more aggressively.
+    if (isHard && blueDist < 420) {
+      player.dodge = nearestBlue.direction;
+    }
+  } else if (Math.random() < 0.4 + ai.chaos * 0.3) {
+    player.dodge = null;
+  }
+
+  const nearestRed = findNearestRedThreat(gameState, player.track, CONFIG.playerX, ai.awarenessRange);
+  if (!nearestRed) {
+    if (Math.random() < ai.chaos * 0.35) {
+      const randomLane = Math.floor(Math.random() * CONFIG.lanesPerTrack);
+      if (randomLane !== player.lane) player.lane = randomLane;
+    }
+    return;
+  }
+
+  const bestLane = chooseBestLane(gameState, player, ai);
+  if (bestLane === player.lane) return;
+
+  const redDist = nearestRed.x - CONFIG.playerX;
+  const criticalRed = isHard && redDist < 420;
+
+  if (canExecute || criticalRed) {
+    player.lane = bestLane;
+    return;
+  }
+
+  // Failed execution: still move, but often to a suboptimal neighboring lane.
+  const direction = bestLane > player.lane ? 1 : -1;
+  const fallbackLane = clamp(player.lane + direction, 0, CONFIG.lanesPerTrack - 1);
+  player.lane = Math.random() < 0.6 ? fallbackLane : player.lane;
+}
+
+function updateBotsForLobby(lobbyId) {
+  const lobby = lobbies[lobbyId];
+  if (!lobby) return;
+  const gameState = lobby.gameState;
+  Object.values(gameState.players).forEach((p) => {
+    if (!p.isBot || p.falling) return;
+    applyBotDecision(gameState, p);
   });
 }
 
 function loseHP(p, gameState) {
   if (p.falling) return;
+
   p.hp--;
   if (p.hp <= 0) {
     p.falling = true;
@@ -385,6 +685,7 @@ function broadcastGameStateFor(lobbyId) {
       id: p.id,
       name: p.name,
       track: p.track,
+      isBot: p.isBot,
       lane: p.lane,
       dodge: p.dodge,
       hp: p.hp,
@@ -401,13 +702,16 @@ function broadcastLobbyFor(lobbyId) {
     id: p.id,
     name: p.name,
     ready: p.ready,
-    track: p.track
+    track: p.track,
+    isBot: Boolean(p.isBot),
+    botProfile: p.isBot ? p.botProfile : null
   }));
   broadcastToLobby(lobbyId, {
     type: "lobby",
     players: snapshot,
     hostId: lobby.hostId,
-    mode: lobby.mode
+    mode: lobby.mode,
+    singlePlayer: lobby.singlePlayer
   });
 }
 
@@ -422,7 +726,7 @@ function broadcastToLobby(lobbyId, obj) {
   if (!lobby) return;
   const msg = JSON.stringify(obj);
   Object.values(lobby.players).forEach(p => {
-    if (p.ws.readyState === 1) p.ws.send(msg);
+    if (p.ws && p.ws.readyState === 1) p.ws.send(msg);
   });
 }
 
@@ -454,7 +758,7 @@ wss.on('connection', (ws, req) => {
     const numPid = Number(pid);
     const gamePlayer = lobby.gameState.players[numPid];
 
-    if (!gamePlayer) {
+    if (!gamePlayer || gamePlayer.isBot) {
       ws.send(JSON.stringify({ type: 'rejected', reason: 'Game already started' }));
       ws.close();
       return;
@@ -479,12 +783,12 @@ wss.on('connection', (ws, req) => {
       if (lobby.players[numPid]) delete lobby.players[numPid];
 
       if (lobby.hostId === numPid) {
-        const remaining = Object.keys(lobby.players);
-        lobby.hostId = remaining.length > 0 ? Number(remaining[0]) : null;
+        pickNextHost(lobby);
         broadcastHostChange(lobbyId);
       }
 
-      if (Object.keys(lobby.players).length === 0) {
+      if (getHumanCount(lobby) === 0) {
+        removeAllBots(lobby);
         lobby.started = false;
         lobby.hostId = null;
         lobby.gameState = freshGameState();
@@ -500,6 +804,12 @@ wss.on('connection', (ws, req) => {
     return;
   }
 
+  if (lobby.singlePlayer && getHumanCount(lobby) >= 1) {
+    ws.send(JSON.stringify({ type: 'rejected', reason: 'Single-player lobby is offline-only' }));
+    ws.close();
+    return;
+  }
+
   if (Object.keys(lobby.players).length >= 4) {
     ws.send(JSON.stringify({ type: 'rejected', reason: 'Lobby is full' }));
     ws.close();
@@ -507,12 +817,15 @@ wss.on('connection', (ws, req) => {
   }
 
   const id = lobby.nextPlayerId++;
-  const track = Object.keys(lobby.players).length;
+  const track = Object.keys(lobby.players).filter((playerId) => !lobby.players[playerId].isBot).length;
   const isHost = lobby.hostId === null;
 
-  lobby.players[id] = { id, name: null, ready: false, track, ws };
+  lobby.players[id] = { id, name: null, ready: false, track, ws, isBot: false, botProfile: null };
   if (isHost) {
     lobby.hostId = id;
+    if (lobby.singlePlayer) {
+      addSinglePlayerBotsToLobby(lobby);
+    }
   }
 
   ws.send(JSON.stringify({ type: 'welcome', id, track, isHost }));
@@ -527,13 +840,13 @@ wss.on('connection', (ws, req) => {
     delete lobby.players[id];
 
     if (lobby.hostId === id) {
-      const remaining = Object.keys(lobby.players);
-      lobby.hostId = remaining.length > 0 ? Number(remaining[0]) : null;
+      pickNextHost(lobby);
       // let clients know about the new leader separately
       broadcastHostChange(lobbyId);
     }
 
-    if (Object.keys(lobby.players).length === 0 && !lobby.started) {
+    if (getHumanCount(lobby) === 0 && !lobby.started) {
+      removeAllBots(lobby);
       lobby.hostId = null;
       lobby.gameState = freshGameState();
       if (lobby.loopInterval) {
@@ -551,16 +864,20 @@ function handleMessageFor(lobbyId, id, raw) {
   const lobby = lobbies[lobbyId];
   if (!lobby) return;
   const gameState = lobby.gameState;
+  const sender = lobby.players[id];
+  if (!sender || sender.isBot) return;
   let msg;
   try { msg = JSON.parse(raw); } catch { return; }
 
   if (msg.type === 'setName') {
-    const nameTaken = Object.values(lobby.players).some(p => p.id !== id && p.name === msg.name);
+    const requestedName = String(msg.name || '').trim().slice(0, 16);
+    if (!requestedName) return;
+    const nameTaken = Object.values(lobby.players).some(p => p.id !== id && p.name === requestedName);
     if (nameTaken) {
       lobby.players[id].ws.send(JSON.stringify({ type: 'nameTaken' }));
       return;
     }
-    lobby.players[id].name = msg.name;
+    lobby.players[id].name = requestedName;
     broadcastLobbyFor(lobbyId);
   }
 
@@ -572,16 +889,18 @@ function handleMessageFor(lobbyId, id, raw) {
   if (msg.type === 'setGameMode') {
     if (id !== lobby.hostId) return;
     const requestedMode = String(msg.mode || '').toLowerCase();
-    if (requestedMode !== 'easy' && requestedMode !== 'hard') return;
+    if (requestedMode !== 'easy' && requestedMode !== 'medium' && requestedMode !== 'hard') return;
     lobby.mode = requestedMode;
     broadcastLobbyFor(lobbyId);
   }
 
   if (msg.type === 'startGame') {
     const players = Object.values(lobby.players);
+    const totalPlayers = players.length;
     const canStart =
       id === lobby.hostId &&
-      players.length >= 1 &&
+      totalPlayers >= 2 &&
+      totalPlayers <= 4 &&
       players.every(p => p.name) &&
       players.every(p => p.ready);
 
@@ -650,7 +969,7 @@ app.use('/game',  express.static(path.join(__dirname, '../client/game')));
 app.use('/lobby', express.static(path.join(__dirname, '../client/lobby')));
 app.use('/sounds', express.static(path.join(__dirname, '../client/sounds')));
 
-const PORT = 3000;
+const PORT = 80;
 server.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
